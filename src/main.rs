@@ -1,39 +1,105 @@
-//! Blinks the LED on a Pico board
-//!
-//! This will blink an LED attached to GP25, which is the pin the Pico uses for the on-board LED.
 #![no_std]
 #![no_main]
 
-use bsp::entry;
-use defmt::*;
-use defmt_rtt as _;
-use embedded_hal::digital::OutputPin;
-use panic_probe as _;
+mod rgb;
 
-// Provide an alias for our BSP so we can switch targets quickly.
-// Uncomment the BSP you included in Cargo.toml, the rest of the code does not need to change.
-use rp_pico as bsp;
-// use sparkfun_pro_micro_rp2040 as bsp;
+use cortex_m::prelude::_embedded_hal_timer_CountDown;
+use embedded_hal::delay::DelayNs;
+use embedded_hal::digital::{InputPin, OutputPin, PinState};
+use rp2040_hal::clocks::init_clocks_and_plls;
+use rp2040_hal::pio::PIOExt;
+use rp2040_hal::rom_data::reset_to_usb_boot;
+use rp2040_hal::Watchdog;
+use rp2040_hal::{entry, pac};
 
-use bsp::hal::{
-    clocks::{init_clocks_and_plls, Clock},
-    pac,
-    sio::Sio,
-    watchdog::Watchdog,
+use crate::rgb::{Color, RGBController};
+use rp2040_hal::dma::DMAExt;
+use rp2040_hal::fugit::ExtU32;
+use usb_device::class_prelude::*;
+
+use panic_halt as _;
+
+const XOSC_CRYSTAL_FREQ: u32 = 12_000_000;
+
+#[repr(u8)]
+enum PinMap {
+    Col13 = 0,
+    Col12 = 1,
+    Col11 = 2,
+    Col10 = 3,
+    Col9 = 4,
+    Col8 = 5,
+    Col7 = 6,
+    Col6 = 7,
+    Col5 = 8,
+    Col4 = 9,
+    Col3 = 10,
+    Col2 = 11,
+    Col15 = 12,
+    Col14 = 13,
+
+    Row4 = 14,
+    Row5 = 15,
+
+    Col1 = 22,
+    Row3 = 23,
+    Row1 = 24,
+    RGBData = 25,
+    RGBEnable = 26,
+    Row2 = 27
+}
+
+impl Into<u8> for PinMap {
+    fn into(self) -> u8 {
+        self as u8
+    }
+}
+
+const fn pin_to_mask(a: PinMap) -> u32 {
+    0x1u32 << (a as u8)
+}
+
+const COL_MASK : u32 = {
+    use PinMap::*;
+
+    pin_to_mask(Col1) |
+    pin_to_mask(Col2) |
+    pin_to_mask(Col3) |
+    pin_to_mask(Col4) |
+    pin_to_mask(Col5) |
+    pin_to_mask(Col6) |
+    pin_to_mask(Col7) |
+    pin_to_mask(Col8) |
+    pin_to_mask(Col9) |
+    pin_to_mask(Col10) |
+    pin_to_mask(Col11) |
+    pin_to_mask(Col12) |
+    pin_to_mask(Col13) |
+    pin_to_mask(Col14) |
+    pin_to_mask(Col15)
 };
+
+const ROW_MASK : u32 = {
+    use PinMap::*;
+
+    pin_to_mask(Row1) |
+    pin_to_mask(Row2) |
+    pin_to_mask(Row3) |
+    pin_to_mask(Row4) |
+    pin_to_mask(Row5)
+};
+
+#[link_section = ".boot2"]
+#[used]
+pub static BOOT2: [u8; 256] = rp2040_boot2::BOOT_LOADER_GENERIC_03H;
 
 #[entry]
 fn main() -> ! {
-    info!("Program start");
     let mut pac = pac::Peripherals::take().unwrap();
-    let core = pac::CorePeripherals::take().unwrap();
     let mut watchdog = Watchdog::new(pac.WATCHDOG);
-    let sio = Sio::new(pac.SIO);
-
-    // External high-speed crystal on the pico board is 12Mhz
-    let external_xtal_freq_hz = 12_000_000u32;
+    
     let clocks = init_clocks_and_plls(
-        external_xtal_freq_hz,
+        XOSC_CRYSTAL_FREQ,
         pac.XOSC,
         pac.CLOCKS,
         pac.PLL_SYS,
@@ -41,37 +107,66 @@ fn main() -> ! {
         &mut pac.RESETS,
         &mut watchdog,
     )
-    .ok()
     .unwrap();
 
-    let mut delay = cortex_m::delay::Delay::new(core.SYST, clocks.system_clock.freq().to_Hz());
+    let mut timer = rp2040_hal::Timer::new(pac.TIMER, &mut pac.RESETS, &clocks);
 
-    let pins = bsp::Pins::new(
+    // The single-cycle I/O block controls our GPIO pins
+    let sio = rp2040_hal::Sio::new(pac.SIO);
+
+    // Set the pins to their default state
+    let pins = rp2040_hal::gpio::Pins::new(
         pac.IO_BANK0,
         pac.PADS_BANK0,
         sio.gpio_bank0,
         &mut pac.RESETS,
     );
 
-    // This is the correct pin on the Raspberry Pico board. On other boards, even if they have an
-    // on-board LED, it might need to be changed.
-    //
-    // Notably, on the Pico W, the LED is not connected to any of the RP2040 GPIOs but to the cyw43 module instead.
-    // One way to do that is by using [embassy](https://github.com/embassy-rs/embassy/blob/main/examples/rp/src/bin/wifi_blinky.rs)
-    //
-    // If you have a Pico W and want to toggle a LED with a simple GPIO output pin, you can connect an external
-    // LED to one of the GPIO pins, and reference that pin here. Don't forget adding an appropriate resistor
-    // in series with the LED.
-    let mut led_pin = pins.led.into_push_pull_output();
+    let dma = pac.DMA.split(&mut pac.RESETS);
 
-    loop {
-        info!("on!");
-        led_pin.set_high().unwrap();
-        delay.delay_ms(500);
-        info!("off!");
-        led_pin.set_low().unwrap();
-        delay.delay_ms(500);
+    // let usb_bus = UsbBusAllocator::new(UsbBus::new(
+    //     pac.USBCTRL_REGS,
+    //     pac.USBCTRL_DPRAM,
+    //     clocks.usb_clock,
+    //     true,
+    //     &mut pac.RESETS
+    // ));
+    //
+    // let mut keyboard = UsbHidClassBuilder::new()
+    //     .add_device(
+    //         usbd_human_interface_device::device::keyboard::NKROBootKeyboardConfig::default(),
+    //     )
+    //     .build(&usb_bus);
+    //
+    // //https://pid.codes
+    // let mut usb_dev = UsbDeviceBuilder::new(&usb_bus, UsbVidPid(0x1209, 0x0001))
+    //     .strings(&[StringDescriptors::default()
+    //         .manufacturer("usbd-human-interface-device")
+    //         .product("NKRO Keyboard")
+    //         .serial_number("TEST")])
+    //     .unwrap()
+    //     .build();
+    
+    let (mut pio, sm0, _, _, _) = pac.PIO0.split(&mut pac.RESETS);
+
+    let rgb_enable_pin = pins.gpio26.into_pull_type::<_>().into_push_pull_output_in_state(PinState::High);
+    let rgb_data_pin = pins.gpio25.into_function();
+
+    let mut rgb_controller: RGBController<68, _, _, _> = RGBController::initialise(&mut pio, sm0, rgb_data_pin, rgb_enable_pin);
+
+    let mut prog_t = timer.count_down();
+    prog_t.start(10.secs());
+    let mut ch_ching = dma.ch0;
+
+    let mut prog_w = timer.count_down();
+
+    while prog_t.wait().is_err() {
+        prog_w.start(100.millis());
+        (ch_ching, rgb_controller) = rgb_controller.apply_pattern(ch_ching);
+        while prog_w.wait().is_err() {}
     }
-}
 
-// End of file
+    reset_to_usb_boot(0, 0);
+
+    loop {}
+}
