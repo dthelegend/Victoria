@@ -102,8 +102,8 @@ impl<P: PIOExt, SM: StateMachineIndex, RGBEnablePinId: PinId> RGBController<P, S
 
         /// The frequency of 1 bit signals
         const DATA_TRANSMISSION_FREQ: f32 = 1.0 / 1.28e-6;
-        const CYCLES_PER_UNIT: f32 = led_program.public_defines.T1 + led_program.public_defines.T2 + led_program.public_defines.T3;
-        const CLK_DIVIDER: (u16, u8) = const {
+        let CYCLES_PER_UNIT: f32 = (led_program.public_defines.T1 + led_program.public_defines.T2 + led_program.public_defines.T3) as f32 * 3.0;
+        let CLK_DIVIDER: (u16, u8) = const {
             let a = super::XOSC_CRYSTAL_FREQ as f32 / (DATA_TRANSMISSION_FREQ * CYCLES_PER_UNIT);
 
             let a_floor = a as u16;
