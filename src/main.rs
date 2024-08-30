@@ -11,8 +11,9 @@ use rp2040_hal::pio::PIOExt;
 use rp2040_hal::rom_data::reset_to_usb_boot;
 use rp2040_hal::Watchdog;
 use rp2040_hal::{entry, pac};
+use rp2040_hal::timer::CountDown;
 
-use crate::rgb::{Color, RGBController};
+use crate::rgb::{EffectModifier, RGBController, StaticRGBEffect};
 use rp2040_hal::dma::DMAExt;
 use rp2040_hal::fugit::ExtU32;
 use usb_device::class_prelude::*;
@@ -46,7 +47,7 @@ enum PinMap {
     Row1 = 24,
     RGBData = 25,
     RGBEnable = 26,
-    Row2 = 27
+    Row2 = 27,
 }
 
 impl Into<u8> for PinMap {
@@ -59,45 +60,45 @@ const fn pin_to_mask(a: PinMap) -> u32 {
     0x1u32 << (a as u8)
 }
 
-const COL_MASK : u32 = {
+const COL_MASK: u32 = {
     use PinMap::*;
 
-    pin_to_mask(Col1) |
-    pin_to_mask(Col2) |
-    pin_to_mask(Col3) |
-    pin_to_mask(Col4) |
-    pin_to_mask(Col5) |
-    pin_to_mask(Col6) |
-    pin_to_mask(Col7) |
-    pin_to_mask(Col8) |
-    pin_to_mask(Col9) |
-    pin_to_mask(Col10) |
-    pin_to_mask(Col11) |
-    pin_to_mask(Col12) |
-    pin_to_mask(Col13) |
-    pin_to_mask(Col14) |
-    pin_to_mask(Col15)
+    pin_to_mask(Col1)
+        | pin_to_mask(Col2)
+        | pin_to_mask(Col3)
+        | pin_to_mask(Col4)
+        | pin_to_mask(Col5)
+        | pin_to_mask(Col6)
+        | pin_to_mask(Col7)
+        | pin_to_mask(Col8)
+        | pin_to_mask(Col9)
+        | pin_to_mask(Col10)
+        | pin_to_mask(Col11)
+        | pin_to_mask(Col12)
+        | pin_to_mask(Col13)
+        | pin_to_mask(Col14)
+        | pin_to_mask(Col15)
 };
 
-const ROW_MASK : u32 = {
+const ROW_MASK: u32 = {
     use PinMap::*;
 
-    pin_to_mask(Row1) |
-    pin_to_mask(Row2) |
-    pin_to_mask(Row3) |
-    pin_to_mask(Row4) |
-    pin_to_mask(Row5)
+    pin_to_mask(Row1)
+        | pin_to_mask(Row2)
+        | pin_to_mask(Row3)
+        | pin_to_mask(Row4)
+        | pin_to_mask(Row5)
 };
 
 #[link_section = ".boot2"]
 #[used]
-pub static BOOT2: [u8; 256] = rp2040_boot2::BOOT_LOADER_GENERIC_03H;
+pub static BOOT2: [u8; 256] = rp2040_boot2::BOOT_LOADER_W25Q080;
 
 #[entry]
 fn main() -> ! {
     let mut pac = pac::Peripherals::take().unwrap();
     let mut watchdog = Watchdog::new(pac.WATCHDOG);
-    
+
     let clocks = init_clocks_and_plls(
         XOSC_CRYSTAL_FREQ,
         pac.XOSC,
@@ -124,46 +125,35 @@ fn main() -> ! {
 
     let dma = pac.DMA.split(&mut pac.RESETS);
 
-    // let usb_bus = UsbBusAllocator::new(UsbBus::new(
-    //     pac.USBCTRL_REGS,
-    //     pac.USBCTRL_DPRAM,
-    //     clocks.usb_clock,
-    //     true,
-    //     &mut pac.RESETS
-    // ));
-    //
-    // let mut keyboard = UsbHidClassBuilder::new()
-    //     .add_device(
-    //         usbd_human_interface_device::device::keyboard::NKROBootKeyboardConfig::default(),
-    //     )
-    //     .build(&usb_bus);
-    //
-    // //https://pid.codes
-    // let mut usb_dev = UsbDeviceBuilder::new(&usb_bus, UsbVidPid(0x1209, 0x0001))
-    //     .strings(&[StringDescriptors::default()
-    //         .manufacturer("usbd-human-interface-device")
-    //         .product("NKRO Keyboard")
-    //         .serial_number("TEST")])
-    //     .unwrap()
-    //     .build();
-    
     let (mut pio, sm0, _, _, _) = pac.PIO0.split(&mut pac.RESETS);
 
-    let rgb_enable_pin = pins.gpio26.into_pull_type::<_>().into_push_pull_output_in_state(PinState::High);
+    let rgb_enable_pin = pins
+        .gpio26
+        .into_pull_type::<_>()
+        .into_push_pull_output_in_state(PinState::High);
     let rgb_data_pin = pins.gpio25.into_function();
 
-    let mut rgb_controller: RGBController<68, _, _, _> = RGBController::initialise(&mut pio, sm0, rgb_data_pin, rgb_enable_pin);
+    let rgb_controller = RGBController::initialise(&mut pio, sm0, rgb_data_pin, rgb_enable_pin);
 
-    let mut prog_t = timer.count_down();
-    prog_t.start(10.secs());
-    let mut ch_ching = dma.ch0;
+    let (mut static_effect_controller, mut effect_modifier) =
+        rgb_controller.start_pattern(dma.ch0, StaticRGBEffect::<255, 255, 255>());
 
-    let mut prog_w = timer.count_down();
+    let mut total_time_count_down = timer.count_down();
 
-    while prog_t.wait().is_err() {
-        prog_w.start(100.millis());
-        (ch_ching, rgb_controller) = rgb_controller.apply_pattern(ch_ching);
-        while prog_w.wait().is_err() {}
+    let mut delay_timer = timer.count_down();
+
+    total_time_count_down.start(10.secs());
+
+    while !total_time_count_down.wait().is_ok() {
+        effect_modifier = effect_modifier.step_effect();
+        let (new_controller, transfer_complete) = static_effect_controller.next();
+        static_effect_controller = new_controller;
+
+        if transfer_complete {
+            delay_timer.start(80.micros());
+
+            while !delay_timer.wait().is_ok() {}
+        }
     }
 
     reset_to_usb_boot(0, 0);
