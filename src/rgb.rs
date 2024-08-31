@@ -1,6 +1,5 @@
 use cortex_m::singleton;
 use embedded_hal::digital::OutputPin;
-use pio::ProgramWithDefines;
 use rp2040_hal::dma::single_buffer::Transfer;
 use rp2040_hal::dma::{single_buffer, SingleChannel};
 use rp2040_hal::gpio::{FunctionPio0, FunctionSio, Pin, PinId, PullDown, PullUp, SioOutput};
@@ -77,8 +76,11 @@ impl<P: PIOExt, SM: StateMachineIndex, RGBEnablePinId: PinId> RGBController<P, S
         rgb_data_pin: Pin<RGBDataPinID, FunctionPio0, PullDown>,
         mut rgb_enable_pin: Pin<RGBEnablePinId, FunctionSio<SioOutput>, PullUp>,
     ) -> RGBController<P, SM, RGBEnablePinId> {
-
-        struct ExpandedDefines { T3: i32, T1: i32, T2: i32 }
+        struct ExpandedDefines {
+            T3: i32,
+            T1: i32,
+            T2: i32,
+        }
 
         let led_program = pio_proc::pio_asm!(
             ".define public T1 3",
@@ -102,9 +104,13 @@ impl<P: PIOExt, SM: StateMachineIndex, RGBEnablePinId: PinId> RGBController<P, S
 
         /// The frequency of 1 bit signals
         const DATA_TRANSMISSION_FREQ: f32 = 1.0 / 1.28e-6;
-        let CYCLES_PER_UNIT: f32 = (led_program.public_defines.T1 + led_program.public_defines.T2 + led_program.public_defines.T3) as f32 * 3.0;
-        let CLK_DIVIDER: (u16, u8) = const {
-            let a = super::XOSC_CRYSTAL_FREQ as f32 / (DATA_TRANSMISSION_FREQ * CYCLES_PER_UNIT);
+        let CYCLES_PER_UNIT: i32 = (led_program.public_defines.T1
+            + led_program.public_defines.T2
+            + led_program.public_defines.T3)
+            * 3;
+        let CLK_DIVIDER: (u16, u8) = {
+            let a =
+                super::XOSC_CRYSTAL_FREQ as f32 / (DATA_TRANSMISSION_FREQ * CYCLES_PER_UNIT as f32);
 
             let a_floor = a as u16;
             let a_rem = a - (a_floor as f32);
@@ -141,12 +147,12 @@ impl<P: PIOExt, SM: StateMachineIndex, RGBEnablePinId: PinId> RGBController<P, S
         }
     }
 
-    pub fn start_pattern<CH0: SingleChannel>(
+    pub fn set_pattern<CH0: SingleChannel>(
         self,
-        ch0: CH0,
+        ch: CH0,
         effect: impl Effect,
     ) -> (
-        RGBEffectController<P, SM, RGBEnablePinId, CH0>,
+        StalledRGBEffectController<P, SM, RGBEnablePinId, CH0>,
         impl EffectModifier,
     ) {
         let Self {
@@ -160,24 +166,25 @@ impl<P: PIOExt, SM: StateMachineIndex, RGBEnablePinId: PinId> RGBController<P, S
 
         let sm = sm.start();
 
-        let (effect_mod, tx_effect_buff) = effect.split();
-
-        // Create the initial transfer
-        let tx_transfer = single_buffer::Config::new(ch0, tx_effect_buff.0, tx).start();
+        let (effect_mod, effect_buffer) = effect.split();
 
         (
-            RGBEffectController {
+            StalledRGBEffectController {
                 sm,
                 rgb_enable_pin,
-                tx_transfer,
+                ch,
+                effect_buffer,
+                tx,
             },
             effect_mod,
         )
     }
 }
 
-pub trait PatternGenerator {
-    fn next_pattern();
+pub enum RGBEffectResult<P: PIOExt, SM: StateMachineIndex, RGBEnablePinId: PinId, CH: SingleChannel>
+{
+    ShouldBlock(RGBEffectController<P, SM, RGBEnablePinId, CH>),
+    Finished(StalledRGBEffectController<P, SM, RGBEnablePinId, CH>),
 }
 
 // An object that holds an RGB Controller with its current state.
@@ -197,17 +204,57 @@ pub struct RGBEffectController<
 impl<P: PIOExt, SM: StateMachineIndex, RGBEnablePinId: PinId, CH: SingleChannel>
     RGBEffectController<P, SM, RGBEnablePinId, CH>
 {
+    pub fn wait(self) -> RGBEffectResult<P, SM, RGBEnablePinId, CH> {
+        let Self {
+            rgb_enable_pin,
+            sm,
+            tx_transfer,
+        } = self;
+        if tx_transfer.is_done() {
+            // Should not block, but provides safety in case it does
+            let (ch, tx_buf, tx) = tx_transfer.wait();
+
+            RGBEffectResult::Finished(StalledRGBEffectController {
+                rgb_enable_pin,
+                sm,
+                ch,
+                effect_buffer: EffectBuffer(tx_buf),
+                tx,
+            })
+        } else {
+            RGBEffectResult::ShouldBlock(Self {
+                rgb_enable_pin,
+                sm,
+                tx_transfer,
+            })
+        }
+    }
+}
+
+pub struct StalledRGBEffectController<
+    P: PIOExt,
+    SM: StateMachineIndex,
+    RGBEnablePinId: PinId,
+    CH: SingleChannel,
+> {
+    rgb_enable_pin: Pin<RGBEnablePinId, FunctionSio<SioOutput>, PullUp>,
+    sm: StateMachine<(P, SM), Running>,
+    ch: CH,
+    effect_buffer: EffectBuffer,
+    tx: Tx<(P, SM)>,
+}
+
+impl<P: PIOExt, SM: StateMachineIndex, RGBEnablePinId: PinId, CH: SingleChannel>
+    StalledRGBEffectController<P, SM, RGBEnablePinId, CH>
+{
     pub fn cancel(self) -> (RGBController<P, SM, RGBEnablePinId>, CH) {
         let Self {
             sm,
-            mut rgb_enable_pin,
-            tx_transfer,
+            rgb_enable_pin,
+            ch,
+            tx,
+            effect_buffer: _,
         } = self;
-
-        // We bin the effect
-        let (ch0, _, tx) = tx_transfer.wait();
-
-        rgb_enable_pin.set_low().unwrap();
 
         let sm = sm.stop();
 
@@ -217,48 +264,29 @@ impl<P: PIOExt, SM: StateMachineIndex, RGBEnablePinId: PinId, CH: SingleChannel>
                 tx,
                 rgb_enable_pin,
             },
-            ch0,
+            ch,
         )
     }
 
-    pub fn next(self) -> (Self, bool) {
+    pub fn start_pattern(self) -> RGBEffectController<P, SM, RGBEnablePinId, CH> {
         let Self {
-            rgb_enable_pin,
             sm,
-            tx_transfer,
+            rgb_enable_pin,
+            ch,
+            effect_buffer: EffectBuffer(tx_buf),
+            tx,
         } = self;
-        if tx_transfer.is_done() {
-            // Should not block, but provides safety in case it does
-            let (ch0, tx_buf, tx) = tx_transfer.wait();
 
-            // Start next transfer
-            let tx_transfer = single_buffer::Config::new(ch0, tx_buf, tx).start();
-
-            (
-                Self {
-                    rgb_enable_pin,
-                    sm,
-                    tx_transfer,
-                },
-                true,
-            )
-        } else {
-            (
-                Self {
-                    rgb_enable_pin,
-                    sm,
-                    tx_transfer,
-                },
-                false,
-            )
+        RGBEffectController {
+            sm,
+            rgb_enable_pin,
+            tx_transfer: single_buffer::Config::new(ch, tx_buf, tx).start(),
         }
     }
 }
 
-// TODO StalledRGBController
-
 pub trait EffectModifier {
-    fn step_effect(self) -> Self;
+    fn step_effect(&mut self) -> ();
 }
 
 pub trait Effect {
@@ -283,7 +311,5 @@ pub struct StaticRGBEffectModifier();
 
 impl EffectModifier for StaticRGBEffectModifier {
     // Purposely the identity function for the static effect
-    fn step_effect(self) -> Self {
-        self
-    }
+    fn step_effect(&mut self) {}
 }
