@@ -1,7 +1,9 @@
 #![no_std]
 #![no_main]
 
+mod common;
 mod constants;
+mod keyboard;
 mod rgb;
 
 use core::default::Default;
@@ -10,22 +12,25 @@ use cortex_m::prelude::_embedded_hal_timer_CountDown;
 use embedded_hal::digital::PinState;
 use rp2040_hal::clocks::init_clocks_and_plls;
 use rp2040_hal::pio::PIOExt;
-use rp2040_hal::{Clock, Watchdog};
 use rp2040_hal::{entry, pac};
+use rp2040_hal::{Clock, Watchdog};
 
-use crate::rgb::{Color, RGBBufferManager, RGBController, RGBCycleEffect, RGBEffect, RGBEffectResult, StaticRGBEffect, UnicornBarfEffect, RESET_DELAY};
+use crate::rgb::{
+    Color, RGBBufferManager, RGBController, RGBCycleEffect, RGBEffect, RGBEffectResult,
+    StaticRGBEffect, UnicornBarfEffect, RESET_DELAY,
+};
 use rp2040_hal::dma::DMAExt;
-use rp2040_hal::fugit::{ExtU32, Duration};
+use rp2040_hal::fugit::{Duration, ExtU32};
 // use usb_device::class_prelude::*;
 
 use constants::{RGBDataPin, RGBEnablePin};
-use rp2040_hal::gpio::{Pin};
+use rp2040_hal::gpio::Pin;
 
 use rp2040_hal::rom_data::reset_to_usb_boot;
 
 #[panic_handler]
 fn panic(_info: &PanicInfo) -> ! {
-    reset_to_usb_boot(0,0);
+    reset_to_usb_boot(0, 0);
 
     loop {}
 }
@@ -69,14 +74,19 @@ fn main() -> ! {
 
     let (mut pio, sm0, _, _, _) = pac.PIO0.split(&mut pac.RESETS);
 
-    let rgb_enable_pin: Pin<RGBEnablePin, _, _> = pins.gpio26
+    let rgb_enable_pin: Pin<RGBEnablePin, _, _> = pins
+        .gpio26
         .into_pull_type()
         .into_push_pull_output_in_state(PinState::Low);
-    let rgb_data_pin: Pin<RGBDataPin, _, _> = pins.gpio25
-        .into_pull_type()
-        .into_function();
+    let rgb_data_pin: Pin<RGBDataPin, _, _> = pins.gpio25.into_pull_type().into_function();
 
-    let rgb_controller = RGBController::initialise(&mut pio, sm0, rgb_data_pin, rgb_enable_pin, clocks.peripheral_clock.freq());
+    let rgb_controller = RGBController::initialise(
+        &mut pio,
+        sm0,
+        rgb_data_pin,
+        rgb_enable_pin,
+        clocks.peripheral_clock.freq(),
+    );
 
     let mut buf_man = RGBBufferManager::create();
 
@@ -85,7 +95,7 @@ fn main() -> ! {
         // StaticRGBEffect::<0x8A,0xCE,0x00>{}; // Brat summer
         // StaticRGBEffect::<0xFF,0xFF,0xFF>{}; // IM BLINDED BY THE LIGHTS
         UnicornBarfEffect::<0xFF,0x3F, 0x0F>::new(); // 0x3F is already pretty bright; Also gets pretty stilted at < 0xF
-        // StaticRGBEffect::<0,0,0>{}; // Turn it off
+                                                     // StaticRGBEffect::<0,0,0>{}; // Turn it off
 
     effect.apply_effect(&mut buf_man);
 
@@ -104,7 +114,7 @@ fn main() -> ! {
         match current_state {
             RGBEffectResult::ShouldBlock(still_working) => {
                 current_state = still_working.wait();
-            },
+            }
             RGBEffectResult::Finished(stalled, mut buf_man) => {
                 let mut delay_timer = timer.count_down();
 
