@@ -80,28 +80,40 @@ impl Color {
     }
 
     // u8 (0 - 255) -> (0 - 1)
-    pub const fn hsl(h : u8, s: u8, l : u8) -> Color {
+    pub const fn hsl(h: u16, s: u8, l: u8) -> Color {
+
+        // Chroma calculation: C = (1 - |2L - 1|) * S
         let c = (((u8::MAX - 2 * l.abs_diff(u8::MAX >> 1)) as u16 * s as u16) / 255) as u8;
-        let x = (c as u16 * (u8::MAX as u16 - ((h as u16 * 6) % (u8::MAX as u16 * 2)).abs_diff(u8::MAX as u16))) as u8;
 
-        const DIV1: u8 = u8::MAX / 6;
-        const DIV2: u8 = ((u8::MAX as u16 * 2) / 6) as u8;
-        const DIV3: u8 = ((u8::MAX as u16 * 3) / 6) as u8;
-        const DIV4: u8 = ((u8::MAX as u16 * 4) / 6) as u8;
-        const DIV5: u8 = ((u8::MAX as u16 * 5) / 6) as u8;
+        // X calculation: X = C * (1 - |(H / 60) % 2 - 1|)
+        let x = ((c as u32 * (u16::MAX as u32 - ((h as u32 * 6 % ((u16::MAX as u32) << 1)).abs_diff(u16::MAX as u32)))) / u16::MAX as u32) as u8;
 
+        // Lightness match value
+        let m = l.saturating_sub(c / 2);
+
+        // Sector definitions using bounds
+        const DIV1: u16 = u16::MAX / 6;                       // 256 / 6;
+        const DIV2: u16 = ((u16::MAX as u32 * 2) / 6) as u16; // 2 * 256 / 6
+        const DIV3: u16 = ((u16::MAX as u32 * 3) / 6) as u16; // 3 (256 / 6)
+        const DIV4: u16 = ((u16::MAX as u32 * 4) / 6) as u16; // 4 * (256 / 6)
+        const DIV5: u16 = ((u16::MAX as u32 * 5) / 6) as u16; // 5 * (256 / 6)
+
+        // Determine RGB components based on hue sector
         let (r_prime, g_prime, b_prime) = match h {
-            0..DIV1 => (c, x, 0),
-            DIV1..DIV2 => (x, c, 0),
-            DIV2..DIV3 => (0, c, x),
-            DIV3..DIV4 => (0, x, c),
-            DIV4..DIV5 => (x, 0, c),
-            DIV5..=u8::MAX => (c, 0, x)
+            0..=DIV1 => (c, x, 0),           // Red to yellow
+            DIV1..=DIV2 => (x, c, 0),        // Yellow to green
+            DIV2..=DIV3 => (0, c, x),        // Green to cyan
+            DIV3..=DIV4 => (0, x, c),        // Cyan to blue
+            DIV4..=DIV5 => (x, 0, c),        // Blue to magenta
+            _ => (c, 0, x),                  // Magenta to red
         };
 
-        let m =  l - c / 2;
-
-        Self::rgb(r_prime + m, g_prime + m, b_prime + m)
+        // Combine components and adjust for lightness
+        Self::rgb(
+            r_prime.saturating_add(m),
+            g_prime.saturating_add(m),
+            b_prime.saturating_add(m),
+        )
     }
 }
 
@@ -357,11 +369,11 @@ impl <const N : usize> RGBEffect for RGBCycleEffect<N> {
     }
 }
 
-pub struct UnicornBarfEffect<const S : u8, const L: u8, const STEP: u8> {
-    current_hue: u8
+pub struct UnicornBarfEffect<const S : u8, const L: u8, const STEP: u16> {
+    current_hue: u16
 }
 
-impl <const S : u8, const L: u8, const STEP: u8> UnicornBarfEffect<S, L, STEP> {
+impl <const S : u8, const L: u8, const STEP: u16> UnicornBarfEffect<S, L, STEP> {
     pub fn new() -> Self {
         UnicornBarfEffect {
             current_hue: 0
@@ -369,10 +381,18 @@ impl <const S : u8, const L: u8, const STEP: u8> UnicornBarfEffect<S, L, STEP> {
     }
 }
 
-impl <const S : u8, const L: u8, const STEP: u8> RGBEffect for UnicornBarfEffect<S, L, STEP> {
+impl <const S : u8, const L: u8, const STEP: u16> RGBEffect for UnicornBarfEffect<S, L, STEP> {
     fn apply_effect(&mut self, buffer: &mut RGBBufferManager) {
         buffer.fill(Color::hsl(self.current_hue, S, L));
 
         self.current_hue = self.current_hue.checked_add(STEP).unwrap_or(0);
+    }
+}
+
+pub struct StaticRGBEffect<const R: u8, const G: u8, const B: u8> {}
+
+impl <const R: u8, const G: u8, const B: u8> RGBEffect for StaticRGBEffect<R, G, B> {
+    fn apply_effect(&mut self, buffer: &mut RGBBufferManager) {
+        buffer.fill(Color::rgb(R, G, B));
     }
 }

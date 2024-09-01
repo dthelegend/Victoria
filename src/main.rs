@@ -13,7 +13,7 @@ use rp2040_hal::pio::PIOExt;
 use rp2040_hal::{Clock, Watchdog};
 use rp2040_hal::{entry, pac};
 
-use crate::rgb::{Color, RGBBufferManager, RGBController, RGBCycleEffect, RGBEffect, RGBEffectResult, StalledRGBEffectController, UnicornBarfEffect, RESET_DELAY};
+use crate::rgb::{Color, RGBBufferManager, RGBController, RGBCycleEffect, RGBEffect, RGBEffectResult, StaticRGBEffect, UnicornBarfEffect, RESET_DELAY};
 use rp2040_hal::dma::DMAExt;
 use rp2040_hal::fugit::{ExtU32, Duration};
 // use usb_device::class_prelude::*;
@@ -82,9 +82,10 @@ fn main() -> ! {
 
     let mut effect =
         // RGBCycleEffect::new([Color::rgb(0x01, 0x0, 0x0), Color::rgb(0x00, 0x01, 0x0), Color::rgb(0x00, 0x0, 0x01)]); // R G B
-        // RGBCycleEffect::new([Color::hex(0x8ACE00), Color::OFF]); // Brat summer
-        // RGBCycleEffect::new([Color::WHITE, Color::OFF]); // IM BLINDED BY THE LIGHTS
-        UnicornBarfEffect::<0xFF,0x01, 1>::new();
+        // StaticRGBEffect::<0x8A,0xCE,0x00>{}; // Brat summer
+        // StaticRGBEffect::<0xFF,0xFF,0xFF>{}; // IM BLINDED BY THE LIGHTS
+        UnicornBarfEffect::<0xFF,0x3F, 0x0F>::new(); // 0x3F is already pretty bright; Also gets pretty stilted at < 0xF
+        // StaticRGBEffect::<0,0,0>{}; // Turn it off
 
     effect.apply_effect(&mut buf_man);
 
@@ -93,9 +94,8 @@ fn main() -> ! {
     let mut effect_timer = timer.count_down();
 
     // TODO replace with a more permanent solution
-    let mut cycle_count = u8::MAX;
-    let effect_timing = 1000.millis();
-
+    let mut cycle_count = u16::MAX as u32 / 0x0F;
+    let effect_timing = 500.nanos();
 
     let mut current_state = active_controller.start_pattern(buf_man).wait();
 
