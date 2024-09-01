@@ -4,30 +4,37 @@
 mod constants;
 mod rgb;
 
+use core::default::Default;
+use core::panic::PanicInfo;
 use cortex_m::prelude::_embedded_hal_timer_CountDown;
 use embedded_hal::digital::PinState;
 use rp2040_hal::clocks::init_clocks_and_plls;
 use rp2040_hal::pio::PIOExt;
-use rp2040_hal::rom_data::reset_to_usb_boot;
-use rp2040_hal::Watchdog;
+use rp2040_hal::{Clock, Watchdog};
 use rp2040_hal::{entry, pac};
 
-use crate::rgb::{EffectModifier, RGBController, RGBEffectResult, StaticRGBEffect};
+use crate::rgb::{Color, RGBBufferManager, RGBController, RGBCycleEffect, RGBEffect, RGBEffectResult, StalledRGBEffectController, UnicornBarfEffect, RESET_DELAY};
 use rp2040_hal::dma::DMAExt;
-use rp2040_hal::fugit::ExtU32;
-use usb_device::class_prelude::*;
+use rp2040_hal::fugit::{ExtU32, Duration};
+// use usb_device::class_prelude::*;
 
 use constants::{RGBDataPin, RGBEnablePin};
-use rp2040_hal::gpio::Pin;
+use rp2040_hal::gpio::{Pin};
 
-#[allow(unused_imports)]
-use panic_halt as _;
+use rp2040_hal::rom_data::reset_to_usb_boot;
+
+#[panic_handler]
+fn panic(_info: &PanicInfo) -> ! {
+    reset_to_usb_boot(0,0);
+
+    loop {}
+}
 
 const XOSC_CRYSTAL_FREQ: u32 = 12_000_000;
 
 #[link_section = ".boot2"]
 #[used]
-pub static BOOT2: [u8; 256] = rp2040_boot2::BOOT_LOADER_W25Q080;
+pub static BOOT2: [u8; 256] = rp2040_boot2::BOOT_LOADER_GENERIC_03H;
 
 #[entry]
 fn main() -> ! {
@@ -62,41 +69,60 @@ fn main() -> ! {
 
     let (mut pio, sm0, _, _, _) = pac.PIO0.split(&mut pac.RESETS);
 
-    let rgb_enable_pin: Pin<RGBEnablePin, _, _> = pins
-        .gpio26
-        .into_pull_type::<_>()
-        .into_push_pull_output_in_state(PinState::High);
-    let rgb_data_pin: Pin<RGBDataPin, _, _> = pins.gpio25.into_function();
+    let rgb_enable_pin: Pin<RGBEnablePin, _, _> = pins.gpio26
+        .into_pull_type()
+        .into_push_pull_output_in_state(PinState::Low);
+    let rgb_data_pin: Pin<RGBDataPin, _, _> = pins.gpio25
+        .into_pull_type()
+        .into_function();
 
-    let rgb_controller = RGBController::initialise(&mut pio, sm0, rgb_data_pin, rgb_enable_pin);
+    let rgb_controller = RGBController::initialise(&mut pio, sm0, rgb_data_pin, rgb_enable_pin, clocks.peripheral_clock.freq());
 
-    let (static_effect_controller, mut effect_modifier) =
-        rgb_controller.set_pattern(dma.ch0, StaticRGBEffect::<255, 255, 255>());
+    let mut buf_man = RGBBufferManager::create();
 
-    let mut total_time_count_down = timer.count_down();
+    let mut effect =
+        // RGBCycleEffect::new([Color::rgb(0x01, 0x0, 0x0), Color::rgb(0x00, 0x01, 0x0), Color::rgb(0x00, 0x0, 0x01)]); // R G B
+        // RGBCycleEffect::new([Color::hex(0x8ACE00), Color::OFF]); // Brat summer
+        // RGBCycleEffect::new([Color::WHITE, Color::OFF]); // IM BLINDED BY THE LIGHTS
+        UnicornBarfEffect::<0xFF,0x01, 1>::new();
 
-    let mut delay_timer = timer.count_down();
+    effect.apply_effect(&mut buf_man);
 
-    total_time_count_down.start(10.secs());
+    let active_controller = rgb_controller.start_effect(dma.ch0);
 
-    let mut current_state = static_effect_controller.start_pattern().wait();
+    let mut effect_timer = timer.count_down();
 
-    while !total_time_count_down.wait().is_ok() {
+    // TODO replace with a more permanent solution
+    let mut cycle_count = u8::MAX;
+    let effect_timing = 1000.millis();
+
+
+    let mut current_state = active_controller.start_pattern(buf_man).wait();
+
+    effect_timer.start(effect_timing);
+    loop {
         match current_state {
-            RGBEffectResult::ShouldBlock(still_working) => current_state = still_working.wait(),
-            RGBEffectResult::Finished(stalled) => {
-                delay_timer.start(80.micros());
+            RGBEffectResult::ShouldBlock(still_working) => {
+                current_state = still_working.wait();
+            },
+            RGBEffectResult::Finished(stalled, mut buf_man) => {
+                let mut delay_timer = timer.count_down();
 
-                effect_modifier.step_effect();
+                delay_timer.start(RESET_DELAY);
 
-                while !delay_timer.wait().is_ok() {}
+                if effect_timer.wait().is_ok() {
+                    effect.apply_effect(&mut buf_man);
+                    effect_timer.start(effect_timing);
+                    cycle_count -= 1;
+                    if cycle_count == 0 {
+                        panic!();
+                    }
+                }
 
-                current_state = stalled.start_pattern().wait()
+                nb::block!(delay_timer.wait());
+
+                current_state = stalled.start_pattern(buf_man).wait();
             }
         }
     }
-
-    reset_to_usb_boot(0, 0);
-
-    loop {}
 }
