@@ -1,9 +1,11 @@
 use crate::common::fixed_point_div;
+use crate::constants::NUMBER_OF_LEDS;
+use crate::hal::{RGBData, RGBEnable};
 use cortex_m::singleton;
 use embedded_hal::digital::{OutputPin, StatefulOutputPin};
 use rp2040_hal::dma::single_buffer::Transfer;
 use rp2040_hal::dma::{single_buffer, SingleChannel};
-use rp2040_hal::fugit::{HertzU32, MicrosDurationU32};
+use rp2040_hal::fugit::HertzU32;
 use rp2040_hal::gpio::{AnyPin, FunctionPio0, FunctionSio, PullUp, SioOutput};
 use rp2040_hal::pio::PinDir::Output;
 use rp2040_hal::pio::{
@@ -11,25 +13,10 @@ use rp2040_hal::pio::{
     UninitStateMachine, PIO,
 };
 
-const NUMBER_OF_LEDS: usize = 68;
-pub const RESET_DELAY: MicrosDurationU32 = MicrosDurationU32::micros(60 * (NUMBER_OF_LEDS as u32));
-
 #[derive(Copy, Clone)]
 pub union Color {
     color_data: u32,
     color_bits: [u8; 4],
-}
-
-impl Default for Color {
-    fn default() -> Self {
-        Color::rgb(0, 0, 0)
-    }
-}
-
-impl Into<u32> for Color {
-    fn into(self) -> u32 {
-        self.as_u32()
-    }
 }
 
 impl Color {
@@ -75,7 +62,7 @@ impl Color {
 
     pub const fn hex(code: u32) -> Color {
         Color::rgb(
-            (code >> u8::BITS * 2) as u8,
+            (code >> (u8::BITS * 2)) as u8,
             (code >> u8::BITS) as u8,
             code as u8,
         )
@@ -84,12 +71,12 @@ impl Color {
     // u8 (0 - 255) -> (0 - 1)
     pub const fn hsl(h: u16, s: u8, l: u8) -> Color {
         // Chroma calculation: C = (1 - |2L - 1|) * S
-        let c = (((u8::MAX - 2 * l.abs_diff(u8::MAX >> 1)) as u16 * s as u16) / 255) as u8;
+        let c =
+            (((u8::MAX - 2 * l.abs_diff(u8::MAX >> 1)) as u16 * s as u16) / u8::MAX as u16) as u8;
 
         // X calculation: X = C * (1 - |(H / 60) % 2 - 1|)
-        let x = ((c as u32
-            * (u16::MAX as u32
-                - ((h as u32 * 6 % ((u16::MAX as u32) << 1)).abs_diff(u16::MAX as u32))))
+        let x = (c as u32
+            * (u16::MAX as u32 - (h as u32 * 6).rem_euclid(u16::MAX as u32))
             / u16::MAX as u32) as u8;
 
         // Lightness match value
@@ -104,12 +91,12 @@ impl Color {
 
         // Determine RGB components based on hue sector
         let (r_prime, g_prime, b_prime) = match h {
-            0..=DIV1 => (c, x, 0),    // Red to yellow
-            DIV1..=DIV2 => (x, c, 0), // Yellow to green
-            DIV2..=DIV3 => (0, c, x), // Green to cyan
-            DIV3..=DIV4 => (0, x, c), // Cyan to blue
-            DIV4..=DIV5 => (x, 0, c), // Blue to magenta
-            _ => (c, 0, x),           // Magenta to red
+            ..DIV1 => (c, x, 0),     // Red to yellow
+            DIV1..DIV2 => (x, c, 0), // Yellow to green
+            DIV2..DIV3 => (0, c, x), // Green to cyan
+            DIV3..DIV4 => (0, x, c), // Cyan to blue
+            DIV4..DIV5 => (x, 0, c), // Blue to magenta
+            DIV5.. => (c, 0, x),     // Magenta to red
         };
 
         // Combine components and adjust for lightness
@@ -121,30 +108,31 @@ impl Color {
     }
 }
 
-pub struct RGBController<
-    P: PIOExt,
-    SM: StateMachineIndex,
-    IEnable: AnyPin<Function = FunctionSio<SioOutput>, Pull = PullUp>,
-    IData: AnyPin<Function = FunctionPio0, Pull = PullUp>,
-> {
-    _rgb_data_pin: IData,
-    rgb_enable_pin: IEnable,
+impl Default for Color {
+    fn default() -> Self {
+        Color::rgb(0, 0, 0)
+    }
+}
+
+impl Into<u32> for Color {
+    fn into(self) -> u32 {
+        self.as_u32()
+    }
+}
+
+pub struct RGBController<P: PIOExt, SM: StateMachineIndex> {
+    _rgb_data_pin: RGBData,
+    rgb_enable_pin: RGBEnable,
     sm: StateMachine<(P, SM), Stopped>,
     tx: Tx<(P, SM)>,
 }
 
-impl<
-        P: PIOExt,
-        SM: StateMachineIndex,
-        IEnable: AnyPin<Function = FunctionSio<SioOutput>, Pull = PullUp>,
-        IData: AnyPin<Function = FunctionPio0, Pull = PullUp>,
-    > RGBController<P, SM, IEnable, IData>
-{
+impl<P: PIOExt, SM: StateMachineIndex> RGBController<P, SM> {
     pub fn initialise(
         pio: &mut PIO<P>,
         uninit_sm: UninitStateMachine<(P, SM)>,
-        rgb_data_pin: IData,
-        rgb_enable_pin: IEnable,
+        rgb_data_pin: RGBData,
+        mut rgb_enable_pin: RGBEnable,
         clock_freq: HertzU32,
     ) -> Self {
         let led_program = pio_proc::pio_asm!(
@@ -178,8 +166,6 @@ impl<
             fixed_point_div(clock_freq, bit_freq)
         };
 
-        let concrete_data_pin = rgb_data_pin.into();
-
         let (mut sm, _, tx) = rp2040_hal::pio::PIOBuilder::from_installed_program(installed)
             // Set buffers
             .buffers(rp2040_hal::pio::Buffers::OnlyTx)
@@ -192,42 +178,35 @@ impl<
             // Only pull the number of color bits before auto-pulling
             .pull_threshold(Color::BITS as u8)
             // Set the pin which will be side_set
-            .side_set_pin_base(concrete_data_pin.id().num)
+            .side_set_pin_base(rgb_data_pin.id().num)
             // build!
             .build(uninit_sm);
 
-        sm.set_pindirs([(concrete_data_pin.id().num, Output)]);
-
-        let mut concrete_enable_pin = rgb_enable_pin.into();
+        sm.set_pindirs([(rgb_data_pin.id().num, Output)]);
 
         // Ensure the pin is high just in case
-        if !concrete_enable_pin.is_set_high().unwrap() {
-            concrete_enable_pin.set_high().unwrap();
+        if !rgb_enable_pin.is_set_high().unwrap() {
+            rgb_enable_pin.set_high().unwrap();
         }
 
         RGBController {
             sm,
             tx,
-            rgb_enable_pin: IEnable::from(concrete_enable_pin),
-            _rgb_data_pin: IData::from(concrete_data_pin),
+            rgb_enable_pin,
+            _rgb_data_pin: rgb_data_pin,
         }
     }
 
-    pub fn start_effect<CH: SingleChannel>(
-        self,
-        ch: CH,
-    ) -> StalledRGBEffectController<P, SM, CH, IEnable, IData> {
+    pub fn start_effect<CH: SingleChannel>(self, ch: CH) -> StalledRGBEffectController<P, SM, CH> {
         let Self {
             sm,
             tx,
-            rgb_enable_pin,
+            mut rgb_enable_pin,
             _rgb_data_pin,
         } = self;
 
-        let mut concrete_enable_pin = rgb_enable_pin.into();
-
         // Pull high to enable RGB
-        concrete_enable_pin.set_low().unwrap();
+        rgb_enable_pin.set_low().unwrap();
 
         let sm = sm.start();
 
@@ -235,51 +214,29 @@ impl<
             sm,
             ch,
             tx,
-            rgb_enable_pin: IEnable::from(concrete_enable_pin),
+            rgb_enable_pin,
             _rgb_data_pin,
         }
     }
 }
 
-pub enum RGBEffectResult<
-    P: PIOExt,
-    SM: StateMachineIndex,
-    CH: SingleChannel,
-    IEnable: AnyPin<Function = FunctionSio<SioOutput>, Pull = PullUp>,
-    IData: AnyPin<Function = FunctionPio0, Pull = PullUp>,
-> {
-    ShouldBlock(RGBEffectController<P, SM, CH, IEnable, IData>),
-    Finished(
-        StalledRGBEffectController<P, SM, CH, IEnable, IData>,
-        RGBBufferManager,
-    ),
+pub enum RGBEffectResult<P: PIOExt, SM: StateMachineIndex, CH: SingleChannel> {
+    ShouldBlock(RGBEffectController<P, SM, CH>),
+    Finished(StalledRGBEffectController<P, SM, CH>, RGBBufferManager),
 }
 
 // An object that holds an RGB Controller with its current state.
-pub struct RGBEffectController<
-    P: PIOExt,
-    SM: StateMachineIndex,
-    CH: SingleChannel,
-    IEnable: AnyPin<Function = FunctionSio<SioOutput>, Pull = PullUp>,
-    IData: AnyPin<Function = FunctionPio0, Pull = PullUp>,
-> {
+pub struct RGBEffectController<P: PIOExt, SM: StateMachineIndex, CH: SingleChannel> {
     sm: StateMachine<(P, SM), Running>,
     // Even though not enforced, the effect controller is implied to 'own' these buffers
     // If there are multiple RGBEffectControllers they would have to share
     tx_transfer: Transfer<CH, &'static mut [u32; NUMBER_OF_LEDS], Tx<(P, SM)>>,
-    rgb_enable_pin: IEnable,
-    _rgb_data_pin: IData,
+    rgb_enable_pin: RGBEnable,
+    _rgb_data_pin: RGBData,
 }
 
-impl<
-        P: PIOExt,
-        SM: StateMachineIndex,
-        CH: SingleChannel,
-        IEnable: AnyPin<Function = FunctionSio<SioOutput>, Pull = PullUp>,
-        IData: AnyPin<Function = FunctionPio0, Pull = PullUp>,
-    > RGBEffectController<P, SM, CH, IEnable, IData>
-{
-    pub fn wait(self) -> RGBEffectResult<P, SM, CH, IEnable, IData> {
+impl<P: PIOExt, SM: StateMachineIndex, CH: SingleChannel> RGBEffectController<P, SM, CH> {
+    pub fn wait(self) -> RGBEffectResult<P, SM, CH> {
         let Self {
             rgb_enable_pin,
             sm,
@@ -311,29 +268,16 @@ impl<
     }
 }
 
-pub struct StalledRGBEffectController<
-    P: PIOExt,
-    SM: StateMachineIndex,
-    CH: SingleChannel,
-    IEnable: AnyPin<Function = FunctionSio<SioOutput>, Pull = PullUp>,
-    IData: AnyPin<Function = FunctionPio0, Pull = PullUp>,
-> {
+pub struct StalledRGBEffectController<P: PIOExt, SM: StateMachineIndex, CH: SingleChannel> {
     sm: StateMachine<(P, SM), Running>,
     ch: CH,
     tx: Tx<(P, SM)>,
-    rgb_enable_pin: IEnable,
-    _rgb_data_pin: IData,
+    rgb_enable_pin: RGBEnable,
+    _rgb_data_pin: RGBData,
 }
 
-impl<
-        P: PIOExt,
-        SM: StateMachineIndex,
-        CH: SingleChannel,
-        IEnable: AnyPin<Function = FunctionSio<SioOutput>, Pull = PullUp>,
-        IData: AnyPin<Function = FunctionPio0, Pull = PullUp>,
-    > StalledRGBEffectController<P, SM, CH, IEnable, IData>
-{
-    pub fn cancel(self) -> (RGBController<P, SM, IEnable, IData>, CH) {
+impl<P: PIOExt, SM: StateMachineIndex, CH: SingleChannel> StalledRGBEffectController<P, SM, CH> {
+    pub fn cancel(self) -> (RGBController<P, SM>, CH) {
         let Self {
             sm,
             ch,
@@ -357,8 +301,8 @@ impl<
 
     pub fn start_pattern(
         self,
-        rgbbuffer_manager: RGBBufferManager,
-    ) -> RGBEffectController<P, SM, CH, IEnable, IData> {
+        rgb_buffer_manager: RGBBufferManager,
+    ) -> RGBEffectController<P, SM, CH> {
         let Self {
             sm,
             rgb_enable_pin,
@@ -367,7 +311,7 @@ impl<
             _rgb_data_pin,
         } = self;
 
-        let RGBBufferManager { buffer } = rgbbuffer_manager;
+        let RGBBufferManager { buffer } = rgb_buffer_manager;
 
         RGBEffectController {
             sm,
@@ -439,7 +383,7 @@ impl<const S: u8, const L: u8, const STEP: u16> RGBEffect for UnicornBarfEffect<
     fn apply_effect(&mut self, buffer: &mut RGBBufferManager) {
         buffer.fill(Color::hsl(self.current_hue, S, L));
 
-        self.current_hue = self.current_hue.checked_add(STEP).unwrap_or(0);
+        self.current_hue = self.current_hue.wrapping_add(STEP);
     }
 }
 
