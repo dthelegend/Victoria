@@ -73,23 +73,23 @@ hal::bsp_pins!(
     // Rows
     Gpio24 {
         name: row1,
-        aliases: { FunctionSioInput, PullUp: Row1 }
+        aliases: { FunctionSioInput, PullDown: Row1 }
     },
     Gpio27 {
         name: row2,
-        aliases: { FunctionSioInput, PullUp: Row2 }
+        aliases: { FunctionSioInput, PullDown: Row2 }
     },
     Gpio23 {
         name: row3,
-        aliases: { FunctionSioInput, PullUp: Row3 }
+        aliases: { FunctionSioInput, PullDown: Row3 }
     },
     Gpio14 {
         name: row4,
-        aliases: { FunctionSioInput, PullUp: Row4 }
+        aliases: { FunctionSioInput, PullDown: Row4 }
     },
     Gpio15 {
         name: row5,
-        aliases: { FunctionSioInput, PullUp: Row5 }
+        aliases: { FunctionSioInput, PullDown: Row5 }
     },
 
     // RGB LEDs

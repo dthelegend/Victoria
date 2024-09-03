@@ -74,7 +74,7 @@ fn main() -> ! {
 
     let dma = pac.DMA.split(&mut pac.RESETS);
 
-    let (mut pio, sm0, sm1, _, _) = pac.PIO0.split(&mut pac.RESETS);
+    let (mut pio, sm0, _, _, _) = pac.PIO0.split(&mut pac.RESETS);
 
     let rgb_controller = RGBController::initialise(
         &mut pio,
@@ -168,7 +168,7 @@ fn main() -> ! {
                 Ok(_) => {}
                 Err(UsbHidError::WouldBlock) => {}
                 Err(UsbHidError::Duplicate) => {}
-                Err(e) => panic!(),
+                Err(_) => panic!(),
             }
         }
 
@@ -210,7 +210,7 @@ fn main() -> ! {
                     effect.apply_effect(&mut buf_man);
                 }
 
-                nb::block!(delay_timer.wait());
+                nb::block!(delay_timer.wait()).unwrap();
 
                 current_state = stalled.start_pattern(buf_man).wait();
             }

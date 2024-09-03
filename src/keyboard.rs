@@ -1,5 +1,5 @@
-use embedded_hal::digital::{InputPin, OutputPin, StatefulOutputPin};
-use crate::common::fixed_point_div;
+use embedded_hal::digital::{InputPin, OutputPin};
+
 use crate::hal::{
     Col1, Col10, Col11, Col12, Col13, Col14, Col15, Col2, Col3, Col4, Col5, Col6, Col7, Col8, Col9,
     Row1, Row2, Row3, Row4, Row5,
@@ -108,7 +108,7 @@ impl <KM : KeyMap> ActiveKeyboardManager<KM> {
     }
 }
 
-trait KeyMap {
+pub trait KeyMap {
     fn get_key(&mut self, col: u8, row: u8) -> Keyboard;
 }
 
@@ -116,6 +116,9 @@ pub struct BasicKeymap();
 
 impl KeyMap for BasicKeymap {
     fn get_key(&mut self, col: u8, row: u8) -> Keyboard {
-        todo!()
+        match (col, row) {
+            (0, 0) => panic!(),
+            _ => Keyboard::A
+        }
     }
 }

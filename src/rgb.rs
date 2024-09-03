@@ -6,7 +6,6 @@ use embedded_hal::digital::{OutputPin, StatefulOutputPin};
 use rp2040_hal::dma::single_buffer::Transfer;
 use rp2040_hal::dma::{single_buffer, SingleChannel};
 use rp2040_hal::fugit::HertzU32;
-use rp2040_hal::gpio::{AnyPin, FunctionPio0, FunctionSio, PullUp, SioOutput};
 use rp2040_hal::pio::PinDir::Output;
 use rp2040_hal::pio::{
     PIOExt, Running, ShiftDirection, StateMachine, StateMachineIndex, Stopped, Tx,
