@@ -13,6 +13,7 @@ use cortex_m::prelude::_embedded_hal_timer_CountDown;
 use usb_device::class_prelude::UsbBusAllocator;
 use usb_device::prelude::{StringDescriptors, UsbDeviceBuilder, UsbVidPid};
 use usb_device::UsbError;
+use usbd_human_interface_device::page::Keyboard;
 use usbd_human_interface_device::prelude::UsbHidClassBuilder;
 use usbd_human_interface_device::UsbHidError;
 use hal::{
@@ -29,12 +30,13 @@ use hal::{
 };
 
 use keyboard::KeyboardInputManager;
-use rgb::{Color, RGBBufferManager, RGBController, RGBCycleEffect, RGBEffect, RGBEffectResult};
+use rgb::{RGBBufferManager, RGBController, RGBEffectResult};
 
 use crate::hal::entry;
 use constants::RESET_DELAY;
 use crate::constants::{EFFECT_RATE, HID_TICK_RATE, POLLING_RATE};
 use crate::keyboard::BasicKeymap;
+use crate::rgb::{Color, RGBCycleEffect, RGBEffect, UnicornBarfEffect};
 
 #[panic_handler]
 fn panic(_info: &PanicInfo) -> ! {
@@ -90,9 +92,9 @@ fn main() -> ! {
         // RGBCycleEffect::new([Color::rgb(0x01, 0x0, 0x0), Color::rgb(0x00, 0x01, 0x0), Color::rgb(0x00, 0x0, 0x01)]); // R G B
         // StaticRGBEffect::<0x8A,0xCE,0x00>{}; // Brat summer
         // StaticRGBEffect::<0xFF,0xFF,0xFF>{}; // IM BLINDED BY THE LIGHTS
-        RGBCycleEffect::new([Color::hsl(0x0, 0x0, u8::MAX / 32)]); // Less blinding
-                                                                   // UnicornBarfEffect::<{ u16::MAX }, 0x2FFFFFFF, 0x0F>::new(); // 0x3F is already pretty bright; Also gets pretty stilted at < 0xF
-                                                                   // StaticRGBEffect::<0,0,0>{}; // Turn it off
+        // RGBCycleEffect::new([Color::hsl(0x0, 0x0, u8::MAX / 32)]); // Less blinding
+        UnicornBarfEffect::<{u8::MAX}, 0xF, 0x0F>::new(); // 0x3F is already pretty bright; Also gets pretty stilted at < 0xF
+        // StaticRGBEffect::<0,0,0>{}; // Turn it off
 
     effect.apply_effect(&mut buf_man);
 
@@ -188,7 +190,7 @@ fn main() -> ! {
                     //do nothing
                 }
                 Err(e) => {
-                    core::panic!("Failed to read keyboard report: {:?}", e)
+                    panic!("Failed to read keyboard report: {:?}", e)
                 }
                 Ok(leds) => {
                     // TODO
@@ -203,15 +205,15 @@ fn main() -> ! {
             }
             RGBEffectResult::Finished(stalled, mut buf_man) => {
                 let mut delay_timer = timer.count_down();
-
+                
                 delay_timer.start(RESET_DELAY);
-
+                
                 if effect_timer.wait().is_ok() {
                     effect.apply_effect(&mut buf_man);
                 }
-
+        
                 nb::block!(delay_timer.wait()).unwrap();
-
+        
                 current_state = stalled.start_pattern(buf_man).wait();
             }
         }

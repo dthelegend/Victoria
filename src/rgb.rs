@@ -74,8 +74,9 @@ impl Color {
             (((u8::MAX - 2 * l.abs_diff(u8::MAX >> 1)) as u16 * s as u16) / u8::MAX as u16) as u8;
 
         // X calculation: X = C * (1 - |(H / 60) % 2 - 1|)
-        let x = (c as u32
-            * (u16::MAX as u32 - (h as u32 * 6).rem_euclid(u16::MAX as u32))
+        let x = ((c as u32
+            * (u16::MAX as u32
+                - ((h as u32 * 6 % ((u16::MAX as u32) << 1)).abs_diff(u16::MAX as u32))))
             / u16::MAX as u32) as u8;
 
         // Lightness match value
@@ -109,7 +110,7 @@ impl Color {
 
 impl Default for Color {
     fn default() -> Self {
-        Color::rgb(0, 0, 0)
+        Color::OFF
     }
 }
 
