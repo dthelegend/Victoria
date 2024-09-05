@@ -168,7 +168,7 @@ declare_keymaps! {
             11 => Keyboard::Minus,
             12 => Keyboard::Equal,
             13 => Keyboard::DeleteBackspace,
-            14 => panic!(), // Keyboard::Escape,
+            14 => Keyboard::Escape,
         },
         1 => {
             0 => Keyboard::Tab,
@@ -228,8 +228,8 @@ declare_keymaps! {
             5 => Keyboard::Space,
             // No keys 6..=8
             9 => Keyboard::RightAlt,
-            10 => panic!(), // Function key
-            11 => Keyboard::Menu,
+            10 => panic!(), // Function key acts as a soft reset for the meantime
+            11 => Keyboard::M,
             12 => Keyboard::LeftArrow,
             13 => Keyboard::DownArrow,
             14 => Keyboard::RightArrow,
