@@ -15,7 +15,7 @@ defmt = "0.3"
 defmt-rtt = "0.4"
 panic-probe = { version = "0.3", features = ["print-defmt"] }
 
-rp2040-hal = { version="0.10", features=["rt", "critical-section-impl"] }
+rp2040-hal = { version = "0.10.2", features=["rt", "critical-section-impl"] }
 rp2040-boot2 = "0.3"
 pio-proc = "0.2.2"
 pio = "0.2.1"

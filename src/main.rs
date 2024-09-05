@@ -1,6 +1,5 @@
 #![no_std]
 #![no_main]
-#![feature(gen_blocks)]
 
 mod common;
 mod constants;
@@ -13,7 +12,6 @@ use cortex_m::prelude::_embedded_hal_timer_CountDown;
 use usb_device::class_prelude::UsbBusAllocator;
 use usb_device::prelude::{StringDescriptors, UsbDeviceBuilder, UsbVidPid};
 use usb_device::UsbError;
-use usbd_human_interface_device::page::Keyboard;
 use usbd_human_interface_device::prelude::UsbHidClassBuilder;
 use usbd_human_interface_device::UsbHidError;
 use hal::{
@@ -34,7 +32,7 @@ use rgb::{RGBBufferManager, RGBController, RGBEffectResult};
 
 use crate::hal::entry;
 use constants::RESET_DELAY;
-use crate::constants::{EFFECT_RATE, HID_TICK_RATE, POLLING_RATE};
+use crate::constants::{EFFECTIVE_POLLING_RATE, EFFECT_RATE, HID_TICK_RATE, ROWS_PER_POLL};
 use crate::keyboard::BasicKeymap;
 use crate::rgb::{Color, RGBCycleEffect, RGBEffect, UnicornBarfEffect};
 
@@ -93,7 +91,7 @@ fn main() -> ! {
         // StaticRGBEffect::<0x8A,0xCE,0x00>{}; // Brat summer
         // StaticRGBEffect::<0xFF,0xFF,0xFF>{}; // IM BLINDED BY THE LIGHTS
         // RGBCycleEffect::new([Color::hsl(0x0, 0x0, u8::MAX / 32)]); // Less blinding
-        UnicornBarfEffect::<{u8::MAX}, 0xF, 0x0F>::new(); // 0x3F is already pretty bright; Also gets pretty stilted at < 0xF
+        UnicornBarfEffect::<{u8::MAX}, 0xA, 0x0F>::new(); // 0x3F is already pretty bright; Also gets pretty stilted at < 0xF
         // StaticRGBEffect::<0,0,0>{}; // Turn it off
 
     effect.apply_effect(&mut buf_man);
@@ -127,32 +125,34 @@ fn main() -> ! {
             .serial_number("1")])
         .unwrap()
         .build();
+    
+    let row_pin_group = (
+        pins.row1.reconfigure(),
+        pins.row2.reconfigure(),
+        pins.row3.reconfigure(),
+        pins.row4.reconfigure(),
+        pins.row5.reconfigure());
 
+    let col_pin_group = (
+        pins.col1.reconfigure(),
+        pins.col2.reconfigure(),
+        pins.col3.reconfigure(),
+        pins.col4.reconfigure(),
+        pins.col5.reconfigure(),
+        pins.col6.reconfigure(),
+        pins.col7.reconfigure(),
+        pins.col8.reconfigure(),
+        pins.col9.reconfigure(),
+        pins.col10.reconfigure(),
+        pins.col11.reconfigure(),
+        pins.col12.reconfigure(),
+        pins.col13.reconfigure(),
+        pins.col14.reconfigure(),
+        pins.col15.reconfigure(),);
+    
     let mut input_manager = KeyboardInputManager::initialise(
-        (
-            pins.row1.into_function().into_pull_type(),
-            pins.row2.into_function().into_pull_type(),
-            pins.row3.into_function().into_pull_type(),
-            pins.row4.into_function().into_pull_type(),
-            pins.row5.into_function().into_pull_type(),
-        ),
-        (
-            pins.col1.into_function().into_pull_type(),
-            pins.col2.into_function().into_pull_type(),
-            pins.col3.into_function().into_pull_type(),
-            pins.col4.into_function().into_pull_type(),
-            pins.col5.into_function().into_pull_type(),
-            pins.col6.into_function().into_pull_type(),
-            pins.col7.into_function().into_pull_type(),
-            pins.col8.into_function().into_pull_type(),
-            pins.col9.into_function().into_pull_type(),
-            pins.col10.into_function().into_pull_type(),
-            pins.col11.into_function().into_pull_type(),
-            pins.col12.into_function().into_pull_type(),
-            pins.col13.into_function().into_pull_type(),
-            pins.col14.into_function().into_pull_type(),
-            pins.col15.into_function().into_pull_type(),
-        ),
+        row_pin_group,
+        col_pin_group
     )
     .activate_with_keymap(BasicKeymap());
 
@@ -162,11 +162,11 @@ fn main() -> ! {
 
     effect_timer.start(EFFECT_RATE.into_duration());
     tick_count_down.start(HID_TICK_RATE.into_duration());
-    poll_timer.start(POLLING_RATE.into_duration());
+    poll_timer.start((EFFECTIVE_POLLING_RATE * ROWS_PER_POLL).into_duration());
 
     loop {
         if poll_timer.wait().is_ok() {
-            match keyboard.device().write_report(input_manager.get_report()) {
+            match keyboard.device().write_report(input_manager.get_next_column()) {
                 Ok(_) => {}
                 Err(UsbHidError::WouldBlock) => {}
                 Err(UsbHidError::Duplicate) => {}

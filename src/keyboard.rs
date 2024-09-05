@@ -1,14 +1,17 @@
 use embedded_hal::digital::{InputPin, OutputPin};
-
 use crate::hal::{
     Col1, Col10, Col11, Col12, Col13, Col14, Col15, Col2, Col3, Col4, Col5, Col6, Col7, Col8, Col9,
-    Row1, Row2, Row3, Row4, Row5,
+    Row1, Row2, Row3, Row4, Row5
 };
 
 use usbd_human_interface_device::page::Keyboard;
 
-type RowsTuple = (Row1, Row2, Row3, Row4, Row5);
-type ColsTuple = (
+// TODO improve this whole file
+
+
+type RowsPinGroup = (Row1, Row2, Row3, Row4, Row5);
+
+type ColsPinGroup = (
     Col1,
     Col2,
     Col3,
@@ -23,135 +26,199 @@ type ColsTuple = (
     Col12,
     Col13,
     Col14,
-    Col15,
+    Col15
 );
 
 pub struct KeyboardInputManager {
-    rows: RowsTuple,
-    cols: ColsTuple,
+    rows: RowsPinGroup,
+    cols: ColsPinGroup,
 }
 
 impl KeyboardInputManager {
     pub fn initialise(
-        rows: RowsTuple,
-        cols: ColsTuple,
+        rows: RowsPinGroup,
+        cols: ColsPinGroup,
     ) -> Self {
         KeyboardInputManager { rows, cols }
     }
 
     pub fn activate_with_keymap<KM : KeyMap>(self, keymap: KM) -> ActiveKeyboardManager<KM> {
-        let Self { rows, cols } = self;
+        let Self { rows, mut cols } = self;
+
+        cols.0.set_high().unwrap();
 
         ActiveKeyboardManager {
             rows,
             cols,
-            keymap
+            keymap,
+            current_column: 0
         }
     }
 }
 
 pub struct ActiveKeyboardManager<KM : KeyMap> {
-    rows: RowsTuple,
-    cols: ColsTuple,
-    keymap: KM
+    rows: RowsPinGroup,
+    cols: ColsPinGroup,
+    keymap: KM,
+    current_column: u8 // invariant: this must be < 5
 }
 
 impl <KM : KeyMap> ActiveKeyboardManager<KM> {
 
-    pub fn get_report(&mut self) -> [Keyboard; 15 * 5] {
-        let mut output = [Keyboard::NoEventIndicated; 15 * 5];
-        
-        // MEFINAE
-        macro_rules! scan_rows {
-            ( $col_idx:tt , [ $( $row_idx:tt ),+ ] ) => {
-                $(if self.rows.$row_idx.is_high().unwrap() {
-                     output[$col_idx * 5 + $row_idx] = self.keymap.get_key($col_idx, $row_idx);
-                })+
+    pub fn get_next_column(&mut self) -> [Keyboard; 5] {
+        macro_rules! get_rows {
+            ( $($i:tt ),+ ) => {
+                [
+                    $({
+                        if (self.rows.$i.is_high().unwrap()) {
+                            self.keymap.get_key($i, self.current_column)
+                        } else {
+                            Keyboard::NoEventIndicated
+                        }
+                    },)+
+                ]
             };
         }
 
-        macro_rules! scan_cols {
-            ( $( $col_idx:tt ),+ ) => {
-                $({
-                    self.cols.$col_idx.set_high().unwrap();
-
-                    scan_rows!($col_idx, [ 0, 1, 2, 3, 4 ]);
-
-                    self.cols.$col_idx.set_low().unwrap();
-                })+
+        macro_rules! match_apply_all_cols {
+            ( $to_match:expr, $to_apply_on_match:path, [ $($over:tt),+ ] ) => {
+                match $to_match {
+                    $($over => $to_apply_on_match(&mut self.cols.$over),)+
+                    _ => unreachable!()
+                }
             };
         }
 
-        scan_cols!(0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14);
-        
+        let output = get_rows!(0,1,2,3,4);
+
+        match_apply_all_cols!(self.current_column, OutputPin::set_low, [ 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14 ]).unwrap();
+
+        self.current_column += 1;
+
+        if self.current_column > 14 {
+            self.current_column = 0;
+        }
+
+        match_apply_all_cols!(self.current_column, OutputPin::set_high, [ 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14 ]).unwrap();
+
         output
-
-        // Example:
-        // {
-        //     self.cols.0.set_high().unwrap();
-        //
-        //     if self.rows.0.is_high().unwrap() {
-        //         yield self.keymap.get_key(0, 0);
-        //     }
-        //     if self.rows.1.is_high().unwrap() {
-        //         yield self.keymap.get_key(0, 1);
-        //     }
-        //     if self.rows.2.is_high().unwrap() {
-        //         yield self.keymap.get_key(0, 2);
-        //     }
-        //     if self.rows.3.is_high().unwrap() {
-        //         yield self.keymap.get_key(0, 3);
-        //     }
-        //     if self.rows.4.is_high().unwrap() {
-        //         yield self.keymap.get_key(0, 4);
-        //     }
-        //
-        //     self.cols.0.set_low().unwrap();
-        // }
     }
 }
 
 pub trait KeyMap {
-    fn get_key(&mut self, col: u8, row: u8) -> Keyboard;
+    fn get_key(&mut self, row: u8, col: u8) -> Keyboard;
 }
 
-pub struct BasicKeymap();
+macro_rules! declare_keymaps {
+    { $(
+        $vv:vis struct $name:ident {
+            $(
+                $row:pat_param => {
+                    $(
+                        $col:pat => $out:expr
+                    ),* $(,)?
+                }
+            ),* $(,)?
+        }
+    ),+ } => {
+        $(
+            $vv struct $name ();
+            impl KeyMap for $name {
+                fn get_key(&mut self, row: u8, col: u8) -> Keyboard {
+                    match (row, col) {
+                        $(
+                            $(( $row, $col ) => $out,)*
+                        )*
+                        _ => unreachable!()
+                    }
+                }
+            }
+        )+
+    }
+}
 
-impl KeyMap for BasicKeymap {
-    fn get_key(&mut self, col: u8, row: u8) -> Keyboard {
-        match (row, col) {
-            // (0, 0) => Keyboard::Grave,
-            // (0, 1) => Keyboard::Keyboard1,
-            // (0, 2) => Keyboard::Keyboard2,
-            // (0, 3) => Keyboard::Keyboard3,
-            // (0, 4) => Keyboard::Keyboard4,
-            // (0, 5) => Keyboard::Keyboard5,
-            // (0, 6) => Keyboard::Keyboard6,
-            // (0, 7) => Keyboard::Keyboard7,
-            // (0, 8) => Keyboard::Keyboard8,
-            // (0, 9) => Keyboard::Keyboard9,
-            // (0, 10) => Keyboard::Keyboard0,
-            // (0, 11) => Keyboard::Minus,
-            // (0, 12) => Keyboard::Equal,
-            // (0, 13) => Keyboard::DeleteBackspace,
-            // (0, 14) => Keyboard::Escape,
-            (_, 0) => Keyboard::A,
-            (_, 1) => Keyboard::B,
-            (_, 2) => Keyboard::C,
-            (_, 3) => Keyboard::D,
-            (_, 4) => Keyboard::E,
-            (_, 5) => Keyboard::F,
-            (_, 6) => Keyboard::G,
-            (_, 7) => Keyboard::H,
-            (_, 8) => Keyboard::I,
-            (_, 9) => Keyboard::J,
-            (_, 10) => Keyboard::K,
-            (_, 11) => Keyboard::L,
-            (_, 12) => Keyboard::M,
-            (_, 13) => Keyboard::N,
-            (_, 14) => panic!(),
-            // _ => Keyboard::NoEventIndicated
-            _ => unreachable!()
+declare_keymaps!{
+    pub struct BasicKeymap {
+        0 => {
+            0 => Keyboard::Grave,
+            1 => Keyboard::Keyboard1,
+            2 => Keyboard::Keyboard2,
+            3 => Keyboard::Keyboard3,
+            4 => Keyboard::Keyboard4,
+            5 => Keyboard::Keyboard5,
+            6 => Keyboard::Keyboard6,
+            7 => Keyboard::Keyboard7,
+            8 => Keyboard::Keyboard8,
+            9 => Keyboard::Keyboard9,
+            10 => Keyboard::Keyboard0,
+            11 => Keyboard::Minus,
+            12 => Keyboard::Equal,
+            13 => Keyboard::DeleteBackspace,
+            14 => panic!(),
+        },
+        1 => {
+            0 => Keyboard::Tab,
+            1 => Keyboard::Q,
+            2 => Keyboard::W,
+            3 => Keyboard::E,
+            4 => Keyboard::R,
+            5 => Keyboard::T,
+            6 => Keyboard::Y,
+            7 => Keyboard::U,
+            8 => Keyboard::I,
+            9 => Keyboard::O,
+            10 => Keyboard::P,
+            11 => Keyboard::LeftBrace,
+            12 => Keyboard::RightBrace,
+            13 => Keyboard::Backslash,
+            14 => Keyboard::Home, // Keyboard::Escape
+        },
+        2 => {
+            0 => Keyboard::CapsLock,
+            1 => Keyboard::A,
+            2 => Keyboard::S,
+            3 => Keyboard::D,
+            4 => Keyboard::F,
+            5 => Keyboard::G,
+            6 => Keyboard::H,
+            7 => Keyboard::J,
+            8 => Keyboard::K,
+            9 => Keyboard::L,
+            10 => Keyboard::Semicolon,
+            11 => Keyboard::Apostrophe,
+            // No Key 12
+            13 => Keyboard::ReturnEnter,
+            14 => Keyboard::PageUp,
+        },
+        3 => {
+            0 => Keyboard::LeftShift,
+            1 => Keyboard::Z,
+            2 => Keyboard::X,
+            3 => Keyboard::C,
+            4 => Keyboard::V,
+            5 => Keyboard::B,
+            6 => Keyboard::N,
+            7 => Keyboard::M,
+            8 => Keyboard::Comma,
+            9 => Keyboard::Dot,
+            10 => Keyboard::Backslash,
+            12 => Keyboard::RightShift,
+            13 => Keyboard::UpArrow,
+            14 => Keyboard::PageDown,
+        },
+        4 => {
+            0 => Keyboard::LeftControl,
+            1 => Keyboard::LeftGUI,
+            2 => Keyboard::LeftAlt,
+            // No keys 3..=4
+            5 => Keyboard::Space,
+            // No keys 6..=8
+            9 => Keyboard::RightAlt,
+            10 => panic!(), // Function key
+            11 => Keyboard::Menu,
+            12 => Keyboard::LeftArrow,
+            13 => Keyboard::DownArrow,
+            14 => Keyboard::RightArrow,
         }
     }
 }
