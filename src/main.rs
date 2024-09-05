@@ -9,11 +9,6 @@ mod rgb;
 
 use core::panic::PanicInfo;
 use cortex_m::prelude::_embedded_hal_timer_CountDown;
-use usb_device::class_prelude::UsbBusAllocator;
-use usb_device::prelude::{StringDescriptors, UsbDeviceBuilder, UsbVidPid};
-use usb_device::UsbError;
-use usbd_human_interface_device::prelude::UsbHidClassBuilder;
-use usbd_human_interface_device::UsbHidError;
 use hal::{
     hal::{
         clocks::{init_clocks_and_plls, Clock},
@@ -26,15 +21,29 @@ use hal::{
     },
     XOSC_CRYSTAL_FREQ,
 };
+use rp2040_hal::fugit::ExtU32;
+use usb_device::class_prelude::UsbBusAllocator;
+use usb_device::prelude::{StringDescriptors, UsbDeviceBuilder, UsbVidPid};
+use usb_device::UsbError;
+use usbd_human_interface_device::descriptor::InterfaceProtocol;
+use usbd_human_interface_device::device::keyboard::{
+    NKROBootKeyboardConfig, NKRO_BOOT_KEYBOARD_REPORT_DESCRIPTOR,
+};
+use usbd_human_interface_device::interface::{InterfaceBuilder, ManagedIdleInterfaceConfig};
+use usbd_human_interface_device::page::Keyboard;
+use usbd_human_interface_device::prelude::UsbHidClassBuilder;
+use usbd_human_interface_device::UsbHidError;
 
 use keyboard::KeyboardInputManager;
 use rgb::{RGBBufferManager, RGBController, RGBEffectResult};
 
+use crate::constants::{
+    EFFECT_RATE, HID_TICK_RATE, KEYBOARD_POLLING_RATE, ROWS_PER_POLL, USB_ENDPOINT_POLL_RATE,
+};
 use crate::hal::entry;
-use constants::RESET_DELAY;
-use crate::constants::{EFFECTIVE_POLLING_RATE, EFFECT_RATE, HID_TICK_RATE, ROWS_PER_POLL};
 use crate::keyboard::BasicKeymap;
-use crate::rgb::{Color, RGBCycleEffect, RGBEffect, UnicornBarfEffect};
+use crate::rgb::{RGBEffect, UnicornBarfEffect};
+use constants::RESET_DELAY;
 
 #[panic_handler]
 fn panic(_info: &PanicInfo) -> ! {
@@ -92,7 +101,7 @@ fn main() -> ! {
         // StaticRGBEffect::<0xFF,0xFF,0xFF>{}; // IM BLINDED BY THE LIGHTS
         // RGBCycleEffect::new([Color::hsl(0x0, 0x0, u8::MAX / 32)]); // Less blinding
         UnicornBarfEffect::<{u8::MAX}, 0xA, 0x0F>::new(); // 0x3F is already pretty bright; Also gets pretty stilted at < 0xF
-        // StaticRGBEffect::<0,0,0>{}; // Turn it off
+                                                          // StaticRGBEffect::<0,0,0>{}; // Turn it off
 
     effect.apply_effect(&mut buf_man);
 
@@ -111,27 +120,38 @@ fn main() -> ! {
         &mut pac.RESETS,
     ));
 
-    let mut keyboard = UsbHidClassBuilder::new()
-        .add_device(
-            usbd_human_interface_device::device::keyboard::NKROBootKeyboardConfig::default(),
-        )
-        .build(&usb_bus);
+    let config = NKROBootKeyboardConfig::new(ManagedIdleInterfaceConfig::new(
+        InterfaceBuilder::new(NKRO_BOOT_KEYBOARD_REPORT_DESCRIPTOR)
+            .unwrap()
+            .description("It's the Daudboard. What more could you want?")
+            .boot_device(InterfaceProtocol::Keyboard)
+            .idle_default(500.millis())
+            .unwrap()
+            .in_endpoint(USB_ENDPOINT_POLL_RATE.into_duration())
+            .unwrap()
+            .with_out_endpoint(100.millis())
+            .unwrap()
+            .build(),
+    ));
+
+    let mut keyboard = UsbHidClassBuilder::new().add_device(config).build(&usb_bus);
 
     //https://pid.codes
     let mut usb_dev = UsbDeviceBuilder::new(&usb_bus, UsbVidPid(0x1209, 0x0001))
         .strings(&[StringDescriptors::default()
-            .manufacturer("usbd-human-interface-device")
+            .manufacturer("Daudi")
             .product("The Daudboard")
             .serial_number("1")])
         .unwrap()
         .build();
-    
+
     let row_pin_group = (
         pins.row1.reconfigure(),
         pins.row2.reconfigure(),
         pins.row3.reconfigure(),
         pins.row4.reconfigure(),
-        pins.row5.reconfigure());
+        pins.row5.reconfigure(),
+    );
 
     let col_pin_group = (
         pins.col1.reconfigure(),
@@ -148,13 +168,11 @@ fn main() -> ! {
         pins.col12.reconfigure(),
         pins.col13.reconfigure(),
         pins.col14.reconfigure(),
-        pins.col15.reconfigure(),);
-    
-    let mut input_manager = KeyboardInputManager::initialise(
-        row_pin_group,
-        col_pin_group
-    )
-    .activate_with_keymap(BasicKeymap());
+        pins.col15.reconfigure(),
+    );
+
+    let mut input_manager = KeyboardInputManager::initialise(row_pin_group, col_pin_group)
+        .activate_with_keymap(BasicKeymap());
 
     // Keyboard timers
     let mut tick_count_down = timer.count_down();
@@ -162,15 +180,17 @@ fn main() -> ! {
 
     effect_timer.start(EFFECT_RATE.into_duration());
     tick_count_down.start(HID_TICK_RATE.into_duration());
-    poll_timer.start((EFFECTIVE_POLLING_RATE * ROWS_PER_POLL).into_duration());
+    poll_timer.start((KEYBOARD_POLLING_RATE * ROWS_PER_POLL).into_duration());
 
     loop {
         if poll_timer.wait().is_ok() {
-            match keyboard.device().write_report(input_manager.get_next_column()) {
-                Ok(_) => {}
-                Err(UsbHidError::WouldBlock) => {}
-                Err(UsbHidError::Duplicate) => {}
-                Err(_) => panic!(),
+            if let Some(key_buff_copy) = input_manager.continue_polling() {
+                match keyboard.device().write_report(key_buff_copy) {
+                    Ok(_) => {}
+                    Err(UsbHidError::WouldBlock) => {}
+                    Err(UsbHidError::Duplicate) => {}
+                    Err(_) => panic!(),
+                }
             }
         }
 
@@ -205,15 +225,15 @@ fn main() -> ! {
             }
             RGBEffectResult::Finished(stalled, mut buf_man) => {
                 let mut delay_timer = timer.count_down();
-                
+
                 delay_timer.start(RESET_DELAY);
-                
+
                 if effect_timer.wait().is_ok() {
                     effect.apply_effect(&mut buf_man);
                 }
-        
+
                 nb::block!(delay_timer.wait()).unwrap();
-        
+
                 current_state = stalled.start_pattern(buf_man).wait();
             }
         }
