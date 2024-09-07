@@ -1,6 +1,7 @@
 #![no_std]
 #![no_main]
 #![feature(generic_const_exprs)]
+#![feature(gen_blocks)]
 
 mod common;
 mod constants;
@@ -43,7 +44,7 @@ use crate::constants::{
 };
 use crate::hal::entry;
 use crate::keyboard::{BasicKeymap, KeyMap};
-use crate::rgb::{RGBEffect, UnicornBarfCircleEffect};
+use crate::rgb::{RGBEffect, UnicornBarfWaveEffect};
 use constants::RESET_DELAY;
 
 #[panic_handler]

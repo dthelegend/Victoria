@@ -335,6 +335,11 @@ pub struct RGBBufferManager {
 }
 
 impl RGBBufferManager {
+    pub fn fill_with_iter(&mut self, color_iter: impl IntoIterator<Item = Color>) {
+        for (i, x) in color_iter.into_iter().take(self.buffer.len()).map(|x| x.as_u32()).enumerate() {
+            self.buffer[i] = x;
+        }
+    }
     pub fn fill(&mut self, color: Color) {
         self.buffer.fill(color.as_u32());
     }
@@ -392,6 +397,30 @@ impl<const S: u8, const L: u8, const STEP: u16> RGBEffect for UnicornBarfCircleE
         buffer.fill(Color::hsl(self.current_hue, S, L));
 
         self.current_hue = self.current_hue.wrapping_add(STEP);
+    }
+}
+
+pub struct UnicornBarfWaveEffect<const S: u8, const L: u8, const STEP: u16> {
+    current_hue: u16,
+}
+
+impl<const S: u8, const L: u8, const STEP: u16> RGBEffect for UnicornBarfWaveEffect<S, L, STEP> {
+    
+    fn apply_effect(&mut self, buffer: &mut RGBBufferManager) {
+        // TODO Make this better
+        const UNIT_MOVEMENT: u16 = u16::MAX / (16 * 4);
+        buffer.fill_with_iter(
+            (0..=14).into_iter().cycle()
+            .map(|x| self.current_hue.wrapping_add(x * UNIT_MOVEMENT))
+            .map(|h| Color::hsl(h, S, L)));
+
+        self.current_hue = self.current_hue.wrapping_add(STEP);
+    } 
+}
+
+impl<const S: u8, const L: u8, const STEP: u16> UnicornBarfWaveEffect<S, L, STEP> {
+    pub fn new() -> Self {
+        UnicornBarfWaveEffect { current_hue: 0 }
     }
 }
 
