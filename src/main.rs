@@ -1,5 +1,6 @@
 #![no_std]
 #![no_main]
+#![feature(generic_const_exprs)]
 
 mod common;
 mod constants;
@@ -30,19 +31,19 @@ use usbd_human_interface_device::device::keyboard::{
     NKROBootKeyboardConfig, NKRO_BOOT_KEYBOARD_REPORT_DESCRIPTOR,
 };
 use usbd_human_interface_device::interface::{InterfaceBuilder, ManagedIdleInterfaceConfig};
-use usbd_human_interface_device::page::Keyboard;
 use usbd_human_interface_device::prelude::UsbHidClassBuilder;
 use usbd_human_interface_device::UsbHidError;
 
 use keyboard::KeyboardInputManager;
 use rgb::{RGBBufferManager, RGBController, RGBEffectResult};
 
+use crate::common::ClampedTimer;
 use crate::constants::{
     EFFECT_RATE, HID_TICK_RATE, KEYBOARD_POLLING_RATE, ROWS_PER_POLL, USB_ENDPOINT_POLL_RATE,
 };
 use crate::hal::entry;
-use crate::keyboard::BasicKeymap;
-use crate::rgb::{RGBEffect, UnicornBarfEffect};
+use crate::keyboard::{BasicKeymap, KeyMap};
+use crate::rgb::{RGBEffect, UnicornBarfCircleEffect};
 use constants::RESET_DELAY;
 
 #[panic_handler]
@@ -100,14 +101,16 @@ fn main() -> ! {
         // StaticRGBEffect::<0x8A,0xCE,0x00>{}; // Brat summer
         // StaticRGBEffect::<0xFF,0xFF,0xFF>{}; // IM BLINDED BY THE LIGHTS
         // RGBCycleEffect::new([Color::hsl(0x0, 0x0, u8::MAX / 32)]); // Less blinding
-        UnicornBarfEffect::<{u8::MAX}, 0xA, 0x0F>::new(); // 0x3F is already pretty bright; Also gets pretty stilted at < 0xF
-                                                          // StaticRGBEffect::<0,0,0>{}; // Turn it off
+        // UnicornBarfCircleEffect::<{ u8::MAX }, 0xA, 0x0F>::new(); // 0x3F is already pretty bright; Also gets pretty stilted at < 0xF
+        UnicornBarfWaveEffect::<{ u8::MAX }, 0xA, 0x0F>::new(); // 0x3F is already pretty bright; Also gets pretty stilted at < 0xF
+        // StaticRGBEffect::<0,0,0>{}; // Turn it off
 
     effect.apply_effect(&mut buf_man);
 
     let active_controller = rgb_controller.start_effect(dma.ch0);
 
     let mut effect_timer = timer.count_down();
+    let mut delay_timer = ClampedTimer::new(timer.count_down(), RESET_DELAY);
 
     let mut current_state = active_controller.start_pattern(buf_man).wait();
 
@@ -171,8 +174,8 @@ fn main() -> ! {
         pins.col15.reconfigure(),
     );
 
-    let mut input_manager = KeyboardInputManager::initialise(row_pin_group, col_pin_group)
-        .activate_with_keymap(BasicKeymap());
+    let mut input_manager =
+        KeyboardInputManager::initialise(row_pin_group, col_pin_group).activate();
 
     // Keyboard timers
     let mut tick_count_down = timer.count_down();
@@ -183,58 +186,64 @@ fn main() -> ! {
     poll_timer.start((KEYBOARD_POLLING_RATE * ROWS_PER_POLL).into_duration());
 
     loop {
-        if poll_timer.wait().is_ok() {
-            if let Some(key_buff_copy) = input_manager.continue_polling() {
-                match keyboard.device().write_report(key_buff_copy) {
-                    Ok(_) => {}
+        {
+            // Check the keyboard input
+            if poll_timer.wait().is_ok() {
+                if let Some(key_buff_copy) = input_manager.continue_polling() {
+                    match keyboard
+                        .device()
+                        .write_report(BasicKeymap::transform(key_buff_copy))
+                    {
+                        Ok(_) => {}
+                        Err(UsbHidError::WouldBlock) => {}
+                        Err(UsbHidError::Duplicate) => {}
+                        Err(_) => panic!(),
+                    }
+                }
+            }
+        }
+
+        {
+            // Check the usb poller
+            if usb_dev.poll(&mut [&mut keyboard]) {
+                match keyboard.device().read_report() {
+                    Err(UsbError::WouldBlock) => {
+                        //do nothing
+                    }
+                    Err(e) => {
+                        panic!("Failed to read keyboard report: {:?}", e)
+                    }
+                    Ok(_leds) => {
+                        // TODO create an effect that can use this
+                    }
+                }
+            }
+        }
+
+        {
+            // Perform mandatory keyboard tick
+            if tick_count_down.wait().is_ok() {
+                match keyboard.tick() {
                     Err(UsbHidError::WouldBlock) => {}
-                    Err(UsbHidError::Duplicate) => {}
+                    Ok(_) => {}
                     Err(_) => panic!(),
-                }
+                };
             }
         }
 
-        // Perform mandatory keyboard tick
-        if tick_count_down.wait().is_ok() {
-            match keyboard.tick() {
-                Err(UsbHidError::WouldBlock) => {}
-                Ok(_) => {}
-                Err(_) => panic!(),
-            };
-        }
+        {
+            // Update the rgb
+            current_state = match (delay_timer.wait(), current_state) {
+                (true, RGBEffectResult::ShouldBlock(still_working)) => still_working.wait(),
+                (true, RGBEffectResult::Finished(stalled, mut buf_man)) => {
+                    delay_timer.restart();
+                    if effect_timer.wait().is_ok() {
+                        effect.apply_effect(&mut buf_man);
+                    }
 
-        // Write to the usb when it's ready
-        if usb_dev.poll(&mut [&mut keyboard]) {
-            match keyboard.device().read_report() {
-                Err(UsbError::WouldBlock) => {
-                    //do nothing
+                    stalled.start_pattern(buf_man).wait()
                 }
-                Err(e) => {
-                    panic!("Failed to read keyboard report: {:?}", e)
-                }
-                Ok(leds) => {
-                    // TODO
-                }
-            }
-        }
-
-        // Check RGB
-        match current_state {
-            RGBEffectResult::ShouldBlock(still_working) => {
-                current_state = still_working.wait();
-            }
-            RGBEffectResult::Finished(stalled, mut buf_man) => {
-                let mut delay_timer = timer.count_down();
-
-                delay_timer.start(RESET_DELAY);
-
-                if effect_timer.wait().is_ok() {
-                    effect.apply_effect(&mut buf_man);
-                }
-
-                nb::block!(delay_timer.wait()).unwrap();
-
-                current_state = stalled.start_pattern(buf_man).wait();
+                (false, a) => a,
             }
         }
     }

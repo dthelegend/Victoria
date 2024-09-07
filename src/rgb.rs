@@ -220,13 +220,21 @@ impl<P: PIOExt, SM: StateMachineIndex> RGBController<P, SM> {
     }
 }
 
-pub enum RGBEffectResult<P: PIOExt, SM: StateMachineIndex, CH: SingleChannel> {
+pub enum RGBEffectResult<
+    P: PIOExt + 'static,
+    SM: StateMachineIndex + 'static,
+    CH: SingleChannel + 'static,
+> {
     ShouldBlock(RGBEffectController<P, SM, CH>),
     Finished(StalledRGBEffectController<P, SM, CH>, RGBBufferManager),
 }
 
 // An object that holds an RGB Controller with its current state.
-pub struct RGBEffectController<P: PIOExt, SM: StateMachineIndex, CH: SingleChannel> {
+pub struct RGBEffectController<
+    P: PIOExt + 'static,
+    SM: StateMachineIndex + 'static,
+    CH: SingleChannel + 'static,
+> {
     sm: StateMachine<(P, SM), Running>,
     // Even though not enforced, the effect controller is implied to 'own' these buffers
     // If there are multiple RGBEffectControllers they would have to share
@@ -369,17 +377,17 @@ impl<const N: usize> RGBEffect for RGBCycleEffect<N> {
     }
 }
 
-pub struct UnicornBarfEffect<const S: u8, const L: u8, const STEP: u16> {
+pub struct UnicornBarfCircleEffect<const S: u8, const L: u8, const STEP: u16> {
     current_hue: u16,
 }
 
-impl<const S: u8, const L: u8, const STEP: u16> UnicornBarfEffect<S, L, STEP> {
+impl<const S: u8, const L: u8, const STEP: u16> UnicornBarfCircleEffect<S, L, STEP> {
     pub fn new() -> Self {
-        UnicornBarfEffect { current_hue: 0 }
+        UnicornBarfCircleEffect { current_hue: 0 }
     }
 }
 
-impl<const S: u8, const L: u8, const STEP: u16> RGBEffect for UnicornBarfEffect<S, L, STEP> {
+impl<const S: u8, const L: u8, const STEP: u16> RGBEffect for UnicornBarfCircleEffect<S, L, STEP> {
     fn apply_effect(&mut self, buffer: &mut RGBBufferManager) {
         buffer.fill(Color::hsl(self.current_hue, S, L));
 
