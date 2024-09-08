@@ -11,12 +11,11 @@ jobs:
     continue-on-error: ${{ matrix.experimental || false }}
     strategy:
       matrix:
-        # All generated code should be running on stable now
-        rust: [nightly, stable]
+        # Nightly is the only target for this project ue to a dependency on generic const expressions
+        rust: [nightly]
         include:
-          # Nightly is only for reference and allowed to fail
           - rust: nightly
-            experimental: true
+            experimental: false
         os:
           # Check compilation works on common OSes
           # (i.e. no path issues)

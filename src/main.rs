@@ -1,7 +1,6 @@
 #![no_std]
 #![no_main]
 #![feature(generic_const_exprs)]
-#![feature(gen_blocks)]
 
 mod common;
 mod constants;

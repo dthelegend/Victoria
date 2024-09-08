@@ -46,7 +46,7 @@ impl KeyboardInputManager {
     }
 
     pub fn activate(self) -> ActiveKeyboardManager<5, 15, { 5 * 15 }> {
-        let Self { mut rows, mut cols } = self;
+        let Self { rows, mut cols } = self;
 
         cols.0.set_high().unwrap();
 
@@ -57,26 +57,26 @@ impl KeyboardInputManager {
     }
 }
 
-pub struct ActiveKeyboardManager<const NROW: usize, const NCOL: usize, const NKeys: usize>
+pub struct ActiveKeyboardManager<const NROW: usize, const NCOL: usize, const NKEYS: usize>
 where
-    Assert<{ NCOL * NROW == NKeys }>: IsTrue,
+    Assert<{ NCOL * NROW == NKEYS }>: IsTrue,
 {
     // const-ish vars
     rows: [Pin<DynPinId, FunctionSioInput, PullDown>; NROW],
     cols: [Pin<DynPinId, FunctionSioOutput, PullUp>; NCOL],
 
     // mut vars
-    key_buffer: [bool; NKeys],
+    key_buffer: [bool; NKEYS],
     col_number: usize,
 }
 
-impl<const NRow: usize, const NCOL: usize, const NKEYS: usize>
-    ActiveKeyboardManager<NRow, NCOL, NKEYS>
+impl<const NROW: usize, const NCOL: usize, const NKEYS: usize>
+    ActiveKeyboardManager<NROW, NCOL, NKEYS>
 where
-    Assert<{ NCOL * NRow == NKEYS }>: IsTrue,
+    Assert<{ NCOL * NROW == NKEYS }>: IsTrue,
 {
     fn create(
-        rows: [Pin<DynPinId, FunctionSioInput, PullDown>; NRow],
+        rows: [Pin<DynPinId, FunctionSioInput, PullDown>; NROW],
         mut cols: [Pin<DynPinId, FunctionSioOutput, PullUp>; NCOL],
     ) -> Self {
         cols[0].set_high().unwrap();
@@ -92,7 +92,7 @@ where
 
     pub fn continue_polling(&mut self) -> Option<[bool; NKEYS]> {
         for (i, row_pin) in self.rows.iter_mut().enumerate() {
-            self.key_buffer[NRow * self.col_number + i] = row_pin.is_high().unwrap();
+            self.key_buffer[NROW * self.col_number + i] = row_pin.is_high().unwrap();
         }
 
         self.cols[self.col_number].set_low().unwrap();
@@ -112,11 +112,11 @@ where
 }
 
 // TODO Add abstractions for function layers
-pub trait KeyMap<const NRow: usize, const NCol: usize, const NKeys: usize>
+pub trait KeyMap<const NROW: usize, const NCOL: usize, const NKEYS: usize>
 where
-    Assert<{ NCol * NRow == NKeys }>: IsTrue,
+    Assert<{ NCOL * NROW == NKEYS }>: IsTrue,
 {
-    fn transform(input_buffer: [bool; NKeys]) -> impl Iterator<Item = Keyboard>;
+    fn transform(input_buffer: [bool; NKEYS]) -> impl Iterator<Item = Keyboard>;
 }
 
 macro_rules! declare_keymaps {
