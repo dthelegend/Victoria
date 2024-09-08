@@ -400,25 +400,29 @@ impl<const S: u8, const L: u8, const STEP: u16> RGBEffect for UnicornBarfCircleE
     }
 }
 
-pub struct UnicornBarfWaveEffect<const S: u8, const L: u8, const STEP: u16> {
+pub struct UnicornBarfWaveEffect<const HSUB : u16, const S: u8, const L: u8, const STEP: u16> {
     current_hue: u16,
 }
 
-impl<const S: u8, const L: u8, const STEP: u16> RGBEffect for UnicornBarfWaveEffect<S, L, STEP> {
+impl<const HSUB : u16, const S: u8, const L: u8, const STEP: u16> RGBEffect for UnicornBarfWaveEffect<HSUB, S, L, STEP> {
     
     fn apply_effect(&mut self, buffer: &mut RGBBufferManager) {
-        // TODO Make this better
-        const UNIT_MOVEMENT: u16 = u16::MAX / (16 * 4);
+        let unit_movement: u16 = u16::MAX / (16 * HSUB);
         buffer.fill_with_iter(
-            (0..=14).into_iter().cycle()
-            .map(|x| self.current_hue.wrapping_add(x * UNIT_MOVEMENT))
-            .map(|h| Color::hsl(h, S, L)));
+            (0..=14)
+                .chain((0..=14).rev())
+                .chain(0..=13)
+                .chain((0..=13).rev())
+                .chain(0..=9)
+            .map(|x| self.current_hue.wrapping_add(x * unit_movement))
+            .map(|h| Color::hsl(h, S, L))
+            .cycle());
 
         self.current_hue = self.current_hue.wrapping_add(STEP);
     } 
 }
 
-impl<const S: u8, const L: u8, const STEP: u16> UnicornBarfWaveEffect<S, L, STEP> {
+impl<const HSUB: u16, const S: u8, const L: u8, const STEP: u16> UnicornBarfWaveEffect<HSUB, S, L, STEP> {
     pub fn new() -> Self {
         UnicornBarfWaveEffect { current_hue: 0 }
     }
