@@ -336,7 +336,12 @@ pub struct RGBBufferManager {
 
 impl RGBBufferManager {
     pub fn fill_with_iter(&mut self, color_iter: impl IntoIterator<Item = Color>) {
-        for (i, x) in color_iter.into_iter().take(self.buffer.len()).map(|x| x.as_u32()).enumerate() {
+        for (i, x) in color_iter
+            .into_iter()
+            .take(self.buffer.len())
+            .map(|x| x.as_u32())
+            .enumerate()
+        {
             self.buffer[i] = x;
         }
     }
@@ -400,12 +405,13 @@ impl<const S: u8, const L: u8, const STEP: u16> RGBEffect for UnicornBarfCircleE
     }
 }
 
-pub struct UnicornBarfWaveEffect<const HSUB : u16, const S: u8, const L: u8, const STEP: u16> {
+pub struct UnicornBarfWaveEffect<const HSUB: u16, const S: u8, const L: u8, const STEP: u16> {
     current_hue: u16,
 }
 
-impl<const HSUB : u16, const S: u8, const L: u8, const STEP: u16> RGBEffect for UnicornBarfWaveEffect<HSUB, S, L, STEP> {
-    
+impl<const HSUB: u16, const S: u8, const L: u8, const STEP: u16> RGBEffect
+    for UnicornBarfWaveEffect<HSUB, S, L, STEP>
+{
     fn apply_effect(&mut self, buffer: &mut RGBBufferManager) {
         let unit_movement: u16 = u16::MAX / (16 * HSUB);
         buffer.fill_with_iter(
@@ -414,15 +420,18 @@ impl<const HSUB : u16, const S: u8, const L: u8, const STEP: u16> RGBEffect for 
                 .chain(0..=13)
                 .chain((0..=13).rev())
                 .chain(0..=9)
-            .map(|x| self.current_hue.wrapping_add(x * unit_movement))
-            .map(|h| Color::hsl(h, S, L))
-            .cycle());
+                .map(|x| self.current_hue.wrapping_add(x * unit_movement))
+                .map(|h| Color::hsl(h, S, L))
+                .cycle(),
+        );
 
         self.current_hue = self.current_hue.wrapping_add(STEP);
-    } 
+    }
 }
 
-impl<const HSUB: u16, const S: u8, const L: u8, const STEP: u16> UnicornBarfWaveEffect<HSUB, S, L, STEP> {
+impl<const HSUB: u16, const S: u8, const L: u8, const STEP: u16>
+    UnicornBarfWaveEffect<HSUB, S, L, STEP>
+{
     pub fn new() -> Self {
         UnicornBarfWaveEffect { current_hue: 0 }
     }

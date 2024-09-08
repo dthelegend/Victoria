@@ -102,8 +102,8 @@ fn main() -> ! {
         // StaticRGBEffect::<0xFF,0xFF,0xFF>{}; // IM BLINDED BY THE LIGHTS
         // RGBCycleEffect::new([Color::hsl(0x0, 0x0, u8::MAX / 32)]); // Less blinding
         // UnicornBarfCircleEffect::<{ u8::MAX }, 0xA, 0x0F>::new(); // 0x3F is already pretty bright; Also gets pretty stilted at < 0xF
-        UnicornBarfWaveEffect::<3, { u8::MAX }, 0xA, 0x0F>::new(); // Yummy 
-        // StaticRGBEffect::<0,0,0>{}; // Turn it off
+        UnicornBarfWaveEffect::<3, { u8::MAX }, 0xA, 0x0F>::new(); // Yummy
+                                                                   // StaticRGBEffect::<0,0,0>{}; // Turn it off
 
     effect.apply_effect(&mut buf_man);
 
