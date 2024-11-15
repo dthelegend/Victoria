@@ -24,6 +24,7 @@ nb = "1.1.0"
 
 usb-device = "0.3.2"
 usbd-human-interface-device = "0.5.0"
+nalgebra = { version = "0.33.2", default-features = false, features = ["macros"] }
 
 # cargo build/run
 [profile.dev]

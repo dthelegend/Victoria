@@ -1,12 +1,14 @@
 #![no_std]
 #![no_main]
 #![feature(generic_const_exprs)]
+#![feature(associated_type_defaults)]
 
 mod common;
 mod constants;
 mod hal;
 mod keyboard;
 mod rgb;
+mod keymap;
 
 use core::panic::PanicInfo;
 use cortex_m::prelude::_embedded_hal_timer_CountDown;
@@ -40,11 +42,12 @@ use rgb::{RGBBufferManager, RGBController, RGBEffectResult};
 use crate::common::ClampedTimer;
 use crate::constants::{
     EFFECT_RATE, HID_TICK_RATE, KEYBOARD_POLLING_RATE, ROWS_PER_POLL, USB_ENDPOINT_POLL_RATE,
+    keymaps::DEFAULT_KEYMAP
 };
 use crate::hal::entry;
-use crate::keyboard::{BasicKeymap, KeyMap};
 use crate::rgb::{RGBEffect, UnicornBarfWaveEffect};
 use constants::RESET_DELAY;
+use crate::keymap::LayeredKeymap;
 
 #[panic_handler]
 fn panic(_info: &PanicInfo) -> ! {
@@ -148,35 +151,35 @@ fn main() -> ! {
         .unwrap()
         .build();
 
-    let row_pin_group = (
-        pins.row1.reconfigure(),
-        pins.row2.reconfigure(),
-        pins.row3.reconfigure(),
-        pins.row4.reconfigure(),
-        pins.row5.reconfigure(),
-    );
+    let row_pin_group = [
+        pins.row1.reconfigure().into_dyn_pin(),
+        pins.row2.reconfigure().into_dyn_pin(),
+        pins.row3.reconfigure().into_dyn_pin(),
+        pins.row4.reconfigure().into_dyn_pin(),
+        pins.row5.reconfigure().into_dyn_pin(),
+    ];
 
-    let col_pin_group = (
-        pins.col1.reconfigure(),
-        pins.col2.reconfigure(),
-        pins.col3.reconfigure(),
-        pins.col4.reconfigure(),
-        pins.col5.reconfigure(),
-        pins.col6.reconfigure(),
-        pins.col7.reconfigure(),
-        pins.col8.reconfigure(),
-        pins.col9.reconfigure(),
-        pins.col10.reconfigure(),
-        pins.col11.reconfigure(),
-        pins.col12.reconfigure(),
-        pins.col13.reconfigure(),
-        pins.col14.reconfigure(),
-        pins.col15.reconfigure(),
-    );
+    let col_pin_group = [
+        pins.col1.reconfigure().into_dyn_pin(),
+        pins.col2.reconfigure().into_dyn_pin(),
+        pins.col3.reconfigure().into_dyn_pin(),
+        pins.col4.reconfigure().into_dyn_pin(),
+        pins.col5.reconfigure().into_dyn_pin(),
+        pins.col6.reconfigure().into_dyn_pin(),
+        pins.col7.reconfigure().into_dyn_pin(),
+        pins.col8.reconfigure().into_dyn_pin(),
+        pins.col9.reconfigure().into_dyn_pin(),
+        pins.col10.reconfigure().into_dyn_pin(),
+        pins.col11.reconfigure().into_dyn_pin(),
+        pins.col12.reconfigure().into_dyn_pin(),
+        pins.col13.reconfigure().into_dyn_pin(),
+        pins.col14.reconfigure().into_dyn_pin(),
+        pins.col15.reconfigure().into_dyn_pin(),
+    ];
 
     let mut input_manager =
-        KeyboardInputManager::initialise(row_pin_group, col_pin_group).activate();
-
+        KeyboardInputManager::from_pins(row_pin_group, col_pin_group).activate();
+    
     // Keyboard timers
     let mut tick_count_down = timer.count_down();
     let mut poll_timer = timer.count_down();
@@ -192,7 +195,7 @@ fn main() -> ! {
                 if let Some(key_buff_copy) = input_manager.continue_polling() {
                     match keyboard
                         .device()
-                        .write_report(BasicKeymap::transform(key_buff_copy))
+                        .write_report(DEFAULT_KEYMAP.get_map(key_buff_copy))
                     {
                         Ok(_) => {}
                         Err(UsbHidError::WouldBlock) => {}

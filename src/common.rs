@@ -16,11 +16,6 @@ where
     (int as u16, frac as u8)
 }
 
-pub enum Assert<const CHECK: bool> {}
-
-pub trait IsTrue {}
-
-impl IsTrue for Assert<true> {}
 
 pub struct ClampedTimer<'a> {
     timer: CountDown<'a>,
